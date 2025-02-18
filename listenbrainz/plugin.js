@@ -48,6 +48,7 @@ async function getAsset(url) {
 //#endregion
 //#region plugins/listenbrainz/listenbrainz.ts
 const { store: store$2 } = shelter.plugin;
+let last_track = "";
 async function getScrobble() {
 	if (!store$2.username) {
 		setPresence(null);
@@ -59,6 +60,9 @@ async function getScrobble() {
 		return;
 	}
 	const track = nowPlaying.payload.listens[0].track_metadata;
+	const tract_id = track.track_name + track.artist_name + track.release_name;
+	if (last_track === tract_id) return;
+	last_track = tract_id;
 	const url = await getArt(track.track_name, track.release_name, track.artist_name).catch((e) => {
 		console.log("Couldn't get cover art");
 		return undefined;
@@ -87,7 +91,6 @@ async function getArt(track, album, artist) {
 		return json.images[0].thumbnails.small;
 	});
 	if (url) return url;
-	console.log("Getting art from release group");
 	const rg_url = await fetch(`https://coverartarchive.org/release-group/${metadata.metadata.release.release_group_mbid}`).then(async (result) => {
 		if (result.status !== 200) return "";
 		const json = await result.json();
@@ -107,25 +110,63 @@ var require_web = __commonJS({ "solid-js/web"(exports, module) {
 var import_web = __toESM(require_web(), 1);
 const { TextBox, Header, HeaderTags } = shelter.ui;
 const { store: store$1 } = shelter.plugin;
-const settings = () => [(0, import_web.createComponent)(Header, {
-	get tag() {
-		return HeaderTags.H3;
-	},
-	children: "Username"
-}), (0, import_web.createComponent)(TextBox, {
-	get value() {
-		return store$1.username ?? "";
-	},
-	onInput: (v) => {
-		store$1.username = v;
-	}
-})];
+const settings = () => [
+	(0, import_web.createComponent)(Header, {
+		get tag() {
+			return HeaderTags.H3;
+		},
+		children: "Username"
+	}),
+	(0, import_web.createComponent)(TextBox, {
+		get value() {
+			return store$1.username ?? "";
+		},
+		onInput: (v) => {
+			store$1.username = v;
+		}
+	}),
+	(0, import_web.createComponent)(Header, {
+		get tag() {
+			return HeaderTags.H3;
+		},
+		children: "Application name"
+	}),
+	(0, import_web.createComponent)(TextBox, {
+		get value() {
+			return store$1.name ?? "";
+		},
+		onInput: (v) => {
+			store$1.name = v;
+		}
+	}),
+	(0, import_web.createComponent)(Header, {
+		get tag() {
+			return HeaderTags.H3;
+		},
+		children: "Polling interval (in ms)"
+	}),
+	(0, import_web.createComponent)(TextBox, {
+		get value() {
+			return store$1.interval ?? "";
+		},
+		onInput: (v) => {
+			const int = parseInt(v);
+			if (!v || int < 5e3 || isNaN(int)) {
+				store$1.interval = 5e3;
+				return;
+			}
+			store$1.interval = int;
+		}
+	})
+];
 
 //#endregion
 //#region plugins/listenbrainz/index.ts
 const { util: { log }, plugin: { store }, flux: { dispatcher } } = shelter;
 const DISCORD_APP_ID = "1107251687984472144";
 store.username ??= "";
+store.interval ??= 1e4;
+store.name ??= "music";
 let interval;
 function onLoad() {
 	interval = setInterval(() => {
@@ -139,7 +180,7 @@ function setPresence(track) {
 	dispatcher.dispatch({
 		type: "LOCAL_ACTIVITY_UPDATE",
 		activity: track ? {
-			name: "music",
+			name: store.name,
 			type: 2,
 			details: track.name,
 			state: track.artist,
