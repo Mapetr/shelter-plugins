@@ -3,6 +3,8 @@ import { getAsset } from "./assets";
 
 const { store } = shelter.plugin;
 
+let last_track = "";
+
 export async function getScrobble() {
     if (!store.username) {
         setPresence(null);
@@ -18,6 +20,9 @@ export async function getScrobble() {
         return;
     };
     const track = nowPlaying.payload.listens[0].track_metadata;
+    const tract_id = track.track_name + track.artist_name + track.release_name;
+    if (last_track === tract_id) return;
+    last_track = tract_id;
 
     const url = await getArt(track.track_name, track.release_name, track.artist_name).catch(e => {
         console.log("Couldn't get cover art");
@@ -52,7 +57,6 @@ async function getArt(track: string, album: string, artist: string) {
 
     if (url) return url;
     
-    console.log("Getting art from release group");
     const rg_url = await fetch(`https://coverartarchive.org/release-group/${metadata.metadata.release.release_group_mbid}`).then(async (result) => {
         if (result.status !== 200) return "";
         const json = await result.json();
