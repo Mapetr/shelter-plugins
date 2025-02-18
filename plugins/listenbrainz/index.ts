@@ -10,6 +10,8 @@ const {
 export const DISCORD_APP_ID = "1107251687984472144";
 
 store.username ??= "";
+store.interval ??= 10000;
+store.name ??= "music";
 
 let interval: number;
 
@@ -33,7 +35,7 @@ export function setPresence(track: Track | null) {
 	dispatcher.dispatch({
 		type: "LOCAL_ACTIVITY_UPDATE",
 		activity: track ? {
-			name: "music",
+			name: store.name,
 			type: 2,
 			details: track.name,
 			state: track.artist,
