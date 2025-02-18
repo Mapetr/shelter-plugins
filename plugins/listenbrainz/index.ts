@@ -7,7 +7,7 @@ const {
 } = shelter;
 
 // Taken from https://github.com/yellowsink/shelter-plugins/blob/master/plugins/lastfm/cfg.ts
-const DISCORD_APP_ID = "1107251687984472144";
+export const DISCORD_APP_ID = "1107251687984472144";
 
 store.username ??= "";
 
@@ -29,7 +29,7 @@ export interface Track {
 	url: string;
 }
 
-export function setPresence(track: Track) {
+export function setPresence(track: Track | null) {
 	dispatcher.dispatch({
 		type: "LOCAL_ACTIVITY_UPDATE",
 		activity: track ? {
@@ -37,7 +37,11 @@ export function setPresence(track: Track) {
 			type: 2,
 			details: track.name,
 			state: track.artist,
-			application_id: DISCORD_APP_ID
+			application_id: DISCORD_APP_ID,
+			assets: {
+				large_image: track.albumArt,
+				large_text: track.album
+			}
 		} : null
 	})
 }
