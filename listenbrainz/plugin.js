@@ -27,19 +27,73 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 
 //#endregion
 
+//#region plugins/listenbrainz/assets.ts
+const { post } = shelter.http;
+const cache = new Map();
+async function getAsset(url) {
+	if (cache.has(url)) return cache.get(url);
+	const res = await post({
+		url: `/applications/${DISCORD_APP_ID}/external-assets`,
+		body: { urls: [url] },
+		oldFormErrors: false
+	});
+	if (res.ok) {
+		const path = "mp:" + res.body[0].external_asset_path;
+		cache.set(url, path);
+		return path;
+	}
+	cache.set(url, undefined);
+}
+
+//#endregion
 //#region plugins/listenbrainz/listenbrainz.ts
 const { store: store$2 } = shelter.plugin;
 async function getScrobble() {
-	if (!store$2.username) return;
+	if (!store$2.username) {
+		setPresence(null);
+		return;
+	}
 	const nowPlaying = await fetch(`https://shcors.uwu.network/https://api.listenbrainz.org/1/user/${store$2.username}/playing-now`).then((r) => r.json());
-	if (!nowPlaying?.payload?.count) return;
+	if (!nowPlaying?.payload?.count) {
+		setPresence(null);
+		return;
+	}
 	const track = nowPlaying.payload.listens[0].track_metadata;
+	const url = await getArt(track.track_name, track.release_name, track.artist_name).catch((e) => {
+		console.log("Couldn't get cover art");
+		return undefined;
+	});
 	setPresence({
 		name: track.track_name,
 		artist: track.artist_name,
-		album: "",
+		album: track.release_name,
+		albumArt: await getAsset(url),
 		url: ""
 	});
+}
+async function getArt(track, album, artist) {
+	const metadata = await fetch(`https://shcors.uwu.network/https://api.listenbrainz.org/1/metadata/lookup/?${new URLSearchParams({
+		recording_name: track,
+		release_name: album,
+		artist_name: artist,
+		metadata: "true",
+		inc: "artist tag release"
+	})}`).then(async (result) => {
+		return await result.json();
+	});
+	const url = await fetch(`https://coverartarchive.org/release/${metadata.release_mbid}`).then(async (result) => {
+		if (result.status !== 200) return "";
+		const json = await result.json();
+		return json.images[0].thumbnails.small;
+	});
+	if (url) return url;
+	console.log("Getting art from release group");
+	const rg_url = await fetch(`https://coverartarchive.org/release-group/${metadata.metadata.release.release_group_mbid}`).then(async (result) => {
+		if (result.status !== 200) return "";
+		const json = await result.json();
+		return json.images[0].thumbnails.small;
+	});
+	return rg_url;
 }
 
 //#endregion
@@ -89,12 +143,17 @@ function setPresence(track) {
 			type: 2,
 			details: track.name,
 			state: track.artist,
-			application_id: DISCORD_APP_ID
+			application_id: DISCORD_APP_ID,
+			assets: {
+				large_image: track.albumArt,
+				large_text: track.album
+			}
 		} : null
 	});
 }
 
 //#endregion
+exports.DISCORD_APP_ID = DISCORD_APP_ID
 exports.onLoad = onLoad
 exports.onUnload = onUnload
 exports.setPresence = setPresence
