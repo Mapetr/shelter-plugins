@@ -29,11 +29,16 @@ export async function getScrobble() {
         return undefined;
     });
 
+    let convertedUrl = "";
+    if (url) {
+        convertedUrl = await getAsset(url);
+    }
+
     setPresence({
         name: track.track_name,
         artist: track.artist_name,
         album: track.release_name,
-        albumArt: await getAsset(url),
+        albumArt: convertedUrl,
         url: ""
     });
 }
@@ -49,6 +54,8 @@ async function getArt(track: string, album: string, artist: string) {
         return await result.json()
     });
 
+    if (!metadata.release_mbid) return "";
+
     const url = await fetch(`https://coverartarchive.org/release/${metadata.release_mbid}`).then(async (result) => {
         if (result.status !== 200) return "";
         const json = await result.json();
@@ -56,7 +63,7 @@ async function getArt(track: string, album: string, artist: string) {
     });
 
     if (url) return url;
-    
+
     const rg_url = await fetch(`https://coverartarchive.org/release-group/${metadata.metadata.release.release_group_mbid}`).then(async (result) => {
         if (result.status !== 200) return "";
         const json = await result.json();
