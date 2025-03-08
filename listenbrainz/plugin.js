@@ -67,11 +67,13 @@ async function getScrobble() {
 		console.log("Couldn't get cover art");
 		return undefined;
 	});
+	let convertedUrl = "";
+	if (url) convertedUrl = await getAsset(url);
 	setPresence({
 		name: track.track_name,
 		artist: track.artist_name,
 		album: track.release_name,
-		albumArt: await getAsset(url),
+		albumArt: convertedUrl,
 		url: ""
 	});
 }
@@ -85,6 +87,7 @@ async function getArt(track, album, artist) {
 	})}`).then(async (result) => {
 		return await result.json();
 	});
+	if (!metadata.release_mbid) return "";
 	const url = await fetch(`https://coverartarchive.org/release/${metadata.release_mbid}`).then(async (result) => {
 		if (result.status !== 200) return "";
 		const json = await result.json();
