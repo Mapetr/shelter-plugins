@@ -1,5 +1,5 @@
 {
   "name": "ListenBrainz RPC",
   "author": "mapetr",
-  "description": "An example shelter plugin"
+  "description": "Shows a presence based on what you are listening on ListenBrainz"
 }
