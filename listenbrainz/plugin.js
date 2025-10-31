@@ -169,7 +169,6 @@ const { util: { log }, plugin: { store }, flux: { dispatcher } } = shelter;
 const DISCORD_APP_ID = "1107251687984472144";
 store.username ??= "";
 store.interval ??= 1e4;
-store.name ??= "music";
 let interval;
 function onLoad() {
 	interval = setInterval(() => {
@@ -183,7 +182,7 @@ function setPresence(track) {
 	dispatcher.dispatch({
 		type: "LOCAL_ACTIVITY_UPDATE",
 		activity: track ? {
-			name: store.name,
+			name: `${track.artist} - ${track.name}`,
 			type: 2,
 			details: track.name,
 			state: track.artist,
