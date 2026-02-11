@@ -4,5 +4,11 @@
     "@uwu/shelter-defs": "^1.4.1"
   },
   "type": "module",
-  "workspaces": ["plugins/*"]
+  "workspaces": [
+    "plugins/*"
+  ],
+  "dependencies": {
+    "@cumjar/websmack": "^1.2.0",
+    "spitroast": "^2.1.6"
+  }
 }
