@@ -113,7 +113,7 @@ export const settings = () => {
 						: "Not logged in"}
 			</Text>
 
-			<div style={{ "margin-top": "8px", display: "flex", gap: "8px" }}>
+			<div style={{ "margin-top": "8px", display: "flex", gap: "8px", "justify-content": "space-between" }}>
 				{loggedIn() ? (
 					<Button onClick={logout} size={ButtonSizes.MEDIUM} color={ButtonColors.RED}>
 						Logout
@@ -124,20 +124,30 @@ export const settings = () => {
 						size={ButtonSizes.MEDIUM}
 						color={ButtonColors.BRAND}
 						disabled={loggingIn()}
+						grow={true}
 					>
 						Login with Discord
 					</Button>
 				)}
-			</div>
 
-			<div style={{ "margin-top": "16px", display: "flex", gap: "8px" }}>
 				<Button
 					onClick={pickFile}
 					size={ButtonSizes.MEDIUM}
 					color={ButtonColors.BRAND}
 					disabled={!loggedIn()}
+					grow={true}
 				>
 					Upload Avatar
+				</Button>
+			</div>
+
+			<div style={{ "margin-top": "16px", "margin-bottom": "16px", display: "flex", gap: "8px" }}>
+				<Button
+					onClick={clearCache}
+					size={ButtonSizes.MEDIUM}
+					color={ButtonColors.RED}
+				>
+					Reset cache
 				</Button>
 			</div>
 		</>
