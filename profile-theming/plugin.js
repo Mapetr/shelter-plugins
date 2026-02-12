@@ -39,7 +39,8 @@ var import_web$1 = __toESM(require_web(), 1);
 var import_web$2 = __toESM(require_web(), 1);
 var import_web$3 = __toESM(require_web(), 1);
 var import_web$4 = __toESM(require_web(), 1);
-const _tmpl$ = /*#__PURE__*/ (0, import_web.template)(`<div></div>`, 2);
+var import_web$5 = __toESM(require_web(), 1);
+const _tmpl$ = /*#__PURE__*/ (0, import_web.template)(`<div><!#><!/><!#><!/></div>`, 6), _tmpl$2 = /*#__PURE__*/ (0, import_web.template)(`<div></div>`, 2);
 const { Header, HeaderTags, Button, ButtonColors, ButtonSizes, Text } = shelter.ui;
 const { createSignal, onCleanup } = shelter.solid;
 const { store: store$1 } = shelter.plugin;
@@ -123,23 +124,24 @@ const settings = () => {
 		fileInput.click();
 	};
 	return [
-		(0, import_web$4.createComponent)(Header, {
+		(0, import_web$5.createComponent)(Header, {
 			get tag() {
 				return HeaderTags.H3;
 			},
 			children: "Discord Login"
 		}),
-		(0, import_web$4.createComponent)(Text, { get children() {
-			return (0, import_web$3.memo)(() => !!loggingIn())() ? "Waiting for login..." : loggedIn() ? "Logged in" : "Not logged in";
+		(0, import_web$5.createComponent)(Text, { get children() {
+			return (0, import_web$4.memo)(() => !!loggingIn())() ? "Waiting for login..." : loggedIn() ? "Logged in" : "Not logged in";
 		} }),
 		(() => {
-			const _el$ = (0, import_web$1.getNextElement)(_tmpl$);
+			const _el$ = (0, import_web$1.getNextElement)(_tmpl$), _el$2 = _el$.firstChild, [_el$3, _co$] = (0, import_web$2.getNextMarker)(_el$2.nextSibling), _el$4 = _el$3.nextSibling, [_el$5, _co$2] = (0, import_web$2.getNextMarker)(_el$4.nextSibling);
 			_el$.style.setProperty("margin-top", "8px");
 			_el$.style.setProperty("display", "flex");
 			_el$.style.setProperty("gap", "8px");
-			(0, import_web$2.insert)(_el$, (() => {
-				const _c$ = (0, import_web$3.memo)(() => !!loggedIn());
-				return () => _c$() ? (0, import_web$4.createComponent)(Button, {
+			_el$.style.setProperty("justify-content", "space-between");
+			(0, import_web$3.insert)(_el$, (() => {
+				const _c$ = (0, import_web$4.memo)(() => !!loggedIn());
+				return () => _c$() ? (0, import_web$5.createComponent)(Button, {
 					onClick: logout,
 					get size() {
 						return ButtonSizes.MEDIUM;
@@ -148,7 +150,7 @@ const settings = () => {
 						return ButtonColors.RED;
 					},
 					children: "Logout"
-				}) : (0, import_web$4.createComponent)(Button, {
+				}) : (0, import_web$5.createComponent)(Button, {
 					onClick: login,
 					get size() {
 						return ButtonSizes.MEDIUM;
@@ -159,17 +161,11 @@ const settings = () => {
 					get disabled() {
 						return loggingIn();
 					},
+					grow: true,
 					children: "Login with Discord"
 				});
-			})());
-			return _el$;
-		})(),
-		(() => {
-			const _el$2 = (0, import_web$1.getNextElement)(_tmpl$);
-			_el$2.style.setProperty("margin-top", "16px");
-			_el$2.style.setProperty("display", "flex");
-			_el$2.style.setProperty("gap", "8px");
-			(0, import_web$2.insert)(_el$2, (0, import_web$4.createComponent)(Button, {
+			})(), _el$3, _co$);
+			(0, import_web$3.insert)(_el$, (0, import_web$5.createComponent)(Button, {
 				onClick: pickFile,
 				get size() {
 					return ButtonSizes.MEDIUM;
@@ -180,9 +176,28 @@ const settings = () => {
 				get disabled() {
 					return !loggedIn();
 				},
+				grow: true,
 				children: "Upload Avatar"
+			}), _el$5, _co$2);
+			return _el$;
+		})(),
+		(() => {
+			const _el$6 = (0, import_web$1.getNextElement)(_tmpl$2);
+			_el$6.style.setProperty("margin-top", "16px");
+			_el$6.style.setProperty("margin-bottom", "16px");
+			_el$6.style.setProperty("display", "flex");
+			_el$6.style.setProperty("gap", "8px");
+			(0, import_web$3.insert)(_el$6, (0, import_web$5.createComponent)(Button, {
+				onClick: clearCache,
+				get size() {
+					return ButtonSizes.MEDIUM;
+				},
+				get color() {
+					return ButtonColors.RED;
+				},
+				children: "Reset cache"
 			}));
-			return _el$2;
+			return _el$6;
 		})()
 	];
 };
@@ -190,8 +205,15 @@ const settings = () => {
 //#endregion
 //#region plugins/profile-theming/index.ts
 const { plugin: { scoped, store } } = shelter;
-store.cacheTtl ??= 3e5;
+const CDN_BASE = "https://discordcdn.mapetr.moe";
+const API_BASE = "https://api.discordcdn.mapetr.moe";
+const POSITIVE_TTL = 36e5;
+const NEGATIVE_TTL = 72e5;
 const cache = new Map();
+const pendingQueue = new Map();
+const inFlight = new Map();
+let debounceTimer;
+let rateLimitedUntil = 0;
 function clearCache() {
 	cache.clear();
 }
@@ -208,9 +230,10 @@ function getCached(userId) {
 	return entry.available;
 }
 function setCache(userId, available) {
+	const ttl = available ? POSITIVE_TTL : NEGATIVE_TTL;
 	cache.set(userId, {
 		available,
-		expiry: Date.now() + store.cacheTtl
+		expiry: Date.now() + ttl
 	});
 }
 function extractUserId(src) {
@@ -220,23 +243,75 @@ function extractUserId(src) {
 	if (guild) return guild[1];
 	return null;
 }
-async function tryReplace(img) {
-	const userId = extractUserId(img.src);
-	if (!userId) return;
-	const localUrl = `https://discordcdn.mapetr.moe/avatars/${userId}`;
+async function flushQueue() {
+	const batch = new Map(pendingQueue);
+	pendingQueue.clear();
+	const ids = [...batch.keys()];
+	if (ids.length === 0) return;
+	for (const [id, imgs] of batch) {
+		const existing = inFlight.get(id);
+		if (existing) existing.push(...imgs);
+else inFlight.set(id, [...imgs]);
+	}
+	try {
+		const res = await fetch(`${API_BASE}/avatars/check`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ ids })
+		});
+		if (res.status === 429) {
+			rateLimitedUntil = Date.now() + 6e4;
+			for (const id of ids) {
+				const imgs = inFlight.get(id);
+				if (imgs) {
+					const existing = pendingQueue.get(id);
+					if (existing) existing.push(...imgs);
+else pendingQueue.set(id, imgs);
+				}
+				inFlight.delete(id);
+			}
+			debounceTimer = setTimeout(flushQueue, 6e4);
+			return;
+		}
+		const { available } = await res.json();
+		const availableSet = new Set(available);
+		for (const id of ids) {
+			const has = availableSet.has(id);
+			setCache(id, has);
+			if (has) for (const img of inFlight.get(id)) img.src = `${CDN_BASE}/avatars/${id}`;
+			inFlight.delete(id);
+		}
+	} catch {
+		for (const id of ids) inFlight.delete(id);
+	}
+}
+function queueCheck(userId, img) {
+	const localUrl = `${CDN_BASE}/avatars/${userId}`;
 	if (img.src === localUrl) return;
 	const cached = getCached(userId);
 	if (cached !== undefined) {
 		if (cached) img.src = localUrl;
 		return;
 	}
-	try {
-		const res = await fetch(localUrl, { method: "HEAD" });
-		setCache(userId, res.ok);
-		if (res.ok) img.src = localUrl;
-	} catch {
-		setCache(userId, false);
+	const flying = inFlight.get(userId);
+	if (flying) {
+		flying.push(img);
+		return;
 	}
+	const existing = pendingQueue.get(userId);
+	if (existing) {
+		existing.push(img);
+		return;
+	}
+	pendingQueue.set(userId, [img]);
+	clearTimeout(debounceTimer);
+	const delay = Math.max(150, rateLimitedUntil - Date.now());
+	debounceTimer = setTimeout(flushQueue, delay);
+}
+function tryReplace(img) {
+	const userId = extractUserId(img.src);
+	if (!userId) return;
+	queueCheck(userId, img);
 }
 async function onLoad() {
 	store.userId = (await shelter.flux.awaitStore("UserStore")).getCurrentUser().id;
@@ -249,7 +324,10 @@ async function onLoad() {
 	window.VencordNative.csp.requestAddOverride("https://api.discordcdn.mapetr.moe", ["connect-src"], "Profile Theming plugin");
 }
 function onUnload() {
+	clearTimeout(debounceTimer);
 	cache.clear();
+	pendingQueue.clear();
+	inFlight.clear();
 }
 
 //#endregion
