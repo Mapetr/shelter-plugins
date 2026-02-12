@@ -245,6 +245,8 @@ async function onLoad() {
 	scoped.observeDom(selector, (elem) => {
 		tryReplace(elem);
 	});
+	window.VencordNative.csp.requestAddOverride("https://discordcdn.mapetr.moe", ["connect-src", "img-src"], "Profile Theming plugin");
+	window.VencordNative.csp.requestAddOverride("https://api.discordcdn.mapetr.moe", ["connect-src"], "Profile Theming plugin");
 }
 function onUnload() {
 	cache.clear();

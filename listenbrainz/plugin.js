@@ -174,6 +174,7 @@ function onLoad() {
 	interval = setInterval(() => {
 		getScrobble();
 	}, 1e4);
+	window.VencordNative.csp.requestAddOverride("https://shcors.uwu.network", ["connect-src"], "Profile Theming plugin");
 }
 function onUnload() {
 	clearInterval(interval);
