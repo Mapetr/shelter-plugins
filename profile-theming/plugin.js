@@ -44,7 +44,6 @@ const { Header, HeaderTags, Button, ButtonColors, ButtonSizes, Text } = shelter.
 const { createSignal, onCleanup } = shelter.solid;
 const { store: store$1 } = shelter.plugin;
 const BASE_URL = "https://api.discordcdn.mapetr.moe";
-store$1.userId = shelter.flux.stores.UserStore.getCurrentUser().id;
 function randomState() {
 	const arr = new Uint8Array(16);
 	crypto.getRandomValues(arr);
@@ -239,7 +238,8 @@ async function tryReplace(img) {
 		setCache(userId, false);
 	}
 }
-function onLoad() {
+async function onLoad() {
+	store.userId = (await shelter.flux.awaitStore("UserStore")).getCurrentUser().id;
 	const selector = `img[src*="cdn.discordapp.com/avatars/"], img[src*="/users/"][src*="/avatars/"]`;
 	document.querySelectorAll(selector).forEach(tryReplace);
 	scoped.observeDom(selector, (elem) => {
