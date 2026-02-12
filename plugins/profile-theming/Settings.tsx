@@ -14,8 +14,6 @@ const { store } = shelter.plugin;
 
 const BASE_URL = "https://api.discordcdn.mapetr.moe";
 
-store.userId = shelter.flux.stores.UserStore.getCurrentUser().id;
-
 function randomState(): string {
 	const arr = new Uint8Array(16);
 	crypto.getRandomValues(arr);

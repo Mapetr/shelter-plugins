@@ -66,7 +66,9 @@ async function tryReplace(img: HTMLImageElement) {
 	}
 }
 
-export function onLoad() {
+export async function onLoad() {
+	store.userId = (await shelter.flux.awaitStore("UserStore")).getCurrentUser().id;
+
 	const selector = `img[src*="cdn.discordapp.com/avatars/"], img[src*="/users/"][src*="/avatars/"]`;
 
 	// Replace avatars already in the DOM
