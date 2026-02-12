@@ -15,6 +15,7 @@ const pendingQueue = new Map<string, HTMLImageElement[]>();
 // Tracks userIds with an in-flight request so they don't get re-queued
 const inFlight = new Map<string, HTMLImageElement[]>();
 let debounceTimer: number | undefined;
+let rateLimitedUntil = 0;
 
 export function clearCache() {
 	cache.clear();
@@ -72,6 +73,22 @@ async function flushQueue() {
 			body: JSON.stringify({ ids }),
 		});
 
+		if (res.status === 429) {
+			// Rate limited — move IDs back to pending queue and retry after 1 minute
+			rateLimitedUntil = Date.now() + 60_000;
+			for (const id of ids) {
+				const imgs = inFlight.get(id);
+				if (imgs) {
+					const existing = pendingQueue.get(id);
+					if (existing) existing.push(...imgs);
+					else pendingQueue.set(id, imgs);
+				}
+				inFlight.delete(id);
+			}
+			debounceTimer = setTimeout(flushQueue, 60_000) as unknown as number;
+			return;
+		}
+
 		const { available }: { available: string[] } = await res.json();
 		const availableSet = new Set(available);
 
@@ -119,9 +136,10 @@ function queueCheck(userId: string, img: HTMLImageElement) {
 	}
 	pendingQueue.set(userId, [img]);
 
-	// Debounce the batch request
+	// Debounce the batch request (respect rate limit cooldown)
 	clearTimeout(debounceTimer);
-	debounceTimer = setTimeout(flushQueue, 150) as unknown as number;
+	const delay = Math.max(150, rateLimitedUntil - Date.now());
+	debounceTimer = setTimeout(flushQueue, delay) as unknown as number;
 }
 
 function tryReplace(img: HTMLImageElement) {
