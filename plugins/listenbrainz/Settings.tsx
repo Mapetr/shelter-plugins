@@ -1,5 +1,3 @@
-import { changeInterval } from ".";
-
 const {
 	TextBox,
 	Header,
