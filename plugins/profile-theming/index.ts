@@ -151,6 +151,20 @@ function tryReplace(img: HTMLImageElement) {
 export async function onLoad() {
 	store.userId = (await shelter.flux.awaitStore("UserStore")).getCurrentUser().id;
 
+	const domains = [
+		{ url: "https://discordcdn.mapetr.moe", directives: ["connect-src", "img-src"] },
+		{ url: "https://api.discordcdn.mapetr.moe", directives: ["connect-src"] },
+	];
+
+	let needsRestart = false;
+	for (const { url, directives } of domains) {
+		const allowed = await window.VencordNative.csp.isDomainAllowed(url);
+		if (!allowed) {
+			await window.VencordNative.csp.requestAddOverride(url, directives, "Profile Theming plugin");
+			needsRestart = true;
+		}
+	}
+
 	const selector = `img[src*="cdn.discordapp.com/avatars/"], img[src*="/users/"][src*="/avatars/"]`;
 
 	// Replace avatars already in the DOM
@@ -160,9 +174,6 @@ export async function onLoad() {
 	scoped.observeDom(selector, (elem) => {
 		tryReplace(elem as HTMLImageElement);
 	});
-
-	window.VencordNative.csp.requestAddOverride("https://discordcdn.mapetr.moe", ["connect-src", "img-src"], "Profile Theming plugin");
-	window.VencordNative.csp.requestAddOverride("https://api.discordcdn.mapetr.moe", ["connect-src"], "Profile Theming plugin");
 }
 
 export function onUnload() {
