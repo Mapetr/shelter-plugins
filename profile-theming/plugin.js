@@ -40,7 +40,7 @@ var import_web$2 = __toESM(require_web(), 1);
 var import_web$3 = __toESM(require_web(), 1);
 var import_web$4 = __toESM(require_web(), 1);
 var import_web$5 = __toESM(require_web(), 1);
-const _tmpl$ = /*#__PURE__*/ (0, import_web.template)(`<div><!#><!/><!#><!/></div>`, 6), _tmpl$2 = /*#__PURE__*/ (0, import_web.template)(`<div></div>`, 2);
+const _tmpl$ = /*#__PURE__*/ (0, import_web.template)(`<div></div>`, 2), _tmpl$2 = /*#__PURE__*/ (0, import_web.template)(`<div><!#><!/><!#><!/><!#><!/><!#><!/></div>`, 10);
 const { Header, HeaderTags, Button, ButtonColors, ButtonSizes, Text } = shelter.ui;
 const { createSignal, onCleanup } = shelter.solid;
 const { store: store$1 } = shelter.plugin;
@@ -55,18 +55,16 @@ async function checkToken() {
 	if (!data.valid || data.expired) store$1.authToken = undefined;
 	return data;
 }
-async function uploadAvatar(userId, file) {
+async function uploadAsset(type, userId, file) {
 	const form = new FormData();
-	form.append("avatar", file);
-	const res = await fetch(`${API_BASE}/avatars/${userId}`, {
+	form.append(type, file);
+	const endpoint = type === "avatar" ? "avatars" : "banners";
+	const res = await fetch(`${API_BASE}/${endpoint}/${userId}`, {
 		method: "POST",
 		body: form,
 		headers: { Authorization: `Bearer ${store$1.authToken}` }
 	});
-	if (res.ok) {
-		invalidateUser(userId);
-		return "ok";
-	}
+	if (res.ok) return "ok";
 	if (res.status === 401) {
 		store$1.authToken = undefined;
 		return "expired";
@@ -76,7 +74,6 @@ async function uploadAvatar(userId, file) {
 const settings = () => {
 	const [loggedIn, setLoggedIn] = createSignal(!!store$1.authToken);
 	const [loggingIn, setLoggingIn] = createSignal(false);
-	let fileInput;
 	let pollTimer;
 	if (store$1.authToken) checkToken().then((result) => {
 		if (!result.valid) {
@@ -127,8 +124,33 @@ const settings = () => {
 			duration: 2e3
 		});
 	};
-	const pickFile = () => {
-		fileInput = document.createElement("input");
+	const removeAsset = async (type) => {
+		const userId = store$1.userId?.trim();
+		if (!userId) {
+			shelter.ui.showToast({
+				title: "no user id found",
+				duration: 3e3
+			});
+			return;
+		}
+		const label = type === "avatar" ? "Avatar" : "Banner";
+		const result = await deleteAsset(type, userId, store$1.authToken);
+		if (result === "expired") {
+			setLoggedIn(false);
+			store$1.authToken = undefined;
+			shelter.ui.showToast({
+				title: "Session expired, please log in again",
+				duration: 3e3
+			});
+			return;
+		}
+		shelter.ui.showToast({
+			title: result === "ok" ? `${label} removed` : "Remove failed",
+			duration: 3e3
+		});
+	};
+	const pickFile = (type) => {
+		const fileInput = document.createElement("input");
 		fileInput.type = "file";
 		fileInput.accept = "image/*";
 		fileInput.onchange = async () => {
@@ -142,7 +164,8 @@ const settings = () => {
 				});
 				return;
 			}
-			const result = await uploadAvatar(userId, file);
+			const label = type === "avatar" ? "Avatar" : "Banner";
+			const result = await uploadAsset(type, userId, file);
 			if (result === "expired") {
 				setLoggedIn(false);
 				shelter.ui.showToast({
@@ -152,31 +175,25 @@ const settings = () => {
 				return;
 			}
 			shelter.ui.showToast({
-				title: result === "ok" ? "Avatar uploaded, it will appear once processing is done" : "Upload failed",
+				title: result === "ok" ? `${label} uploaded, it will appear once processing is done` : "Upload failed",
 				duration: 3e3
 			});
 		};
 		fileInput.click();
 	};
 	return [
-		(0, import_web$5.createComponent)(Header, {
-			get tag() {
-				return HeaderTags.H3;
-			},
-			children: "Discord Login"
-		}),
-		(0, import_web$5.createComponent)(Text, { get children() {
-			return (0, import_web$4.memo)(() => !!loggingIn())() ? "Waiting for login..." : loggedIn() ? "Logged in" : "Not logged in";
-		} }),
+		(0, import_web$5.memo)((() => {
+			const _c$ = (0, import_web$5.memo)(() => !!loggingIn());
+			return () => _c$() ? (0, import_web$2.createComponent)(Text, { children: "Waiting for login..." }) : null;
+		})()),
 		(() => {
-			const _el$ = (0, import_web$1.getNextElement)(_tmpl$), _el$2 = _el$.firstChild, [_el$3, _co$] = (0, import_web$2.getNextMarker)(_el$2.nextSibling), _el$4 = _el$3.nextSibling, [_el$5, _co$2] = (0, import_web$2.getNextMarker)(_el$4.nextSibling);
+			const _el$ = (0, import_web$3.getNextElement)(_tmpl$);
 			_el$.style.setProperty("margin-top", "8px");
 			_el$.style.setProperty("display", "flex");
 			_el$.style.setProperty("gap", "8px");
-			_el$.style.setProperty("justify-content", "space-between");
-			(0, import_web$3.insert)(_el$, (() => {
-				const _c$ = (0, import_web$4.memo)(() => !!loggedIn());
-				return () => _c$() ? (0, import_web$5.createComponent)(Button, {
+			(0, import_web$4.insert)(_el$, (() => {
+				const _c$2 = (0, import_web$5.memo)(() => !!loggedIn());
+				return () => _c$2() ? (0, import_web$2.createComponent)(Button, {
 					onClick: logout,
 					get size() {
 						return ButtonSizes.MEDIUM;
@@ -184,8 +201,9 @@ const settings = () => {
 					get color() {
 						return ButtonColors.RED;
 					},
+					grow: true,
 					children: "Logout"
-				}) : (0, import_web$5.createComponent)(Button, {
+				}) : (0, import_web$2.createComponent)(Button, {
 					onClick: login,
 					get size() {
 						return ButtonSizes.MEDIUM;
@@ -199,9 +217,17 @@ const settings = () => {
 					grow: true,
 					children: "Login with Discord"
 				});
-			})(), _el$3, _co$);
-			(0, import_web$3.insert)(_el$, (0, import_web$5.createComponent)(Button, {
-				onClick: pickFile,
+			})());
+			return _el$;
+		})(),
+		(() => {
+			const _el$2 = (0, import_web$3.getNextElement)(_tmpl$2), _el$3 = _el$2.firstChild, [_el$4, _co$] = (0, import_web$1.getNextMarker)(_el$3.nextSibling), _el$5 = _el$4.nextSibling, [_el$6, _co$2] = (0, import_web$1.getNextMarker)(_el$5.nextSibling), _el$7 = _el$6.nextSibling, [_el$8, _co$3] = (0, import_web$1.getNextMarker)(_el$7.nextSibling), _el$9 = _el$8.nextSibling, [_el$10, _co$4] = (0, import_web$1.getNextMarker)(_el$9.nextSibling);
+			_el$2.style.setProperty("margin-top", "8px");
+			_el$2.style.setProperty("display", "grid");
+			_el$2.style.setProperty("grid-template-columns", "1fr 1fr");
+			_el$2.style.setProperty("gap", "8px");
+			(0, import_web$4.insert)(_el$2, (0, import_web$2.createComponent)(Button, {
+				onClick: () => pickFile("avatar"),
 				get size() {
 					return ButtonSizes.MEDIUM;
 				},
@@ -213,16 +239,56 @@ const settings = () => {
 				},
 				grow: true,
 				children: "Upload Avatar"
-			}), _el$5, _co$2);
-			return _el$;
+			}), _el$4, _co$);
+			(0, import_web$4.insert)(_el$2, (0, import_web$2.createComponent)(Button, {
+				onClick: () => pickFile("banner"),
+				get size() {
+					return ButtonSizes.MEDIUM;
+				},
+				get color() {
+					return ButtonColors.BRAND;
+				},
+				get disabled() {
+					return !loggedIn();
+				},
+				grow: true,
+				children: "Upload Banner"
+			}), _el$6, _co$2);
+			(0, import_web$4.insert)(_el$2, (0, import_web$2.createComponent)(Button, {
+				onClick: () => removeAsset("avatar"),
+				get size() {
+					return ButtonSizes.MEDIUM;
+				},
+				get color() {
+					return ButtonColors.RED;
+				},
+				get disabled() {
+					return !loggedIn();
+				},
+				grow: true,
+				children: "Remove Avatar"
+			}), _el$8, _co$3);
+			(0, import_web$4.insert)(_el$2, (0, import_web$2.createComponent)(Button, {
+				onClick: () => removeAsset("banner"),
+				get size() {
+					return ButtonSizes.MEDIUM;
+				},
+				get color() {
+					return ButtonColors.RED;
+				},
+				get disabled() {
+					return !loggedIn();
+				},
+				grow: true,
+				children: "Remove Banner"
+			}), _el$10, _co$4);
+			return _el$2;
 		})(),
 		(() => {
-			const _el$6 = (0, import_web$1.getNextElement)(_tmpl$2);
-			_el$6.style.setProperty("margin-top", "16px");
-			_el$6.style.setProperty("margin-bottom", "16px");
-			_el$6.style.setProperty("display", "flex");
-			_el$6.style.setProperty("gap", "8px");
-			(0, import_web$3.insert)(_el$6, (0, import_web$5.createComponent)(Button, {
+			const _el$11 = (0, import_web$3.getNextElement)(_tmpl$);
+			_el$11.style.setProperty("margin-top", "8px");
+			_el$11.style.setProperty("margin-bottom", "16px");
+			(0, import_web$4.insert)(_el$11, (0, import_web$2.createComponent)(Button, {
 				onClick: clearCache,
 				get size() {
 					return ButtonSizes.MEDIUM;
@@ -232,7 +298,7 @@ const settings = () => {
 				},
 				children: "Reset cache"
 			}));
-			return _el$6;
+			return _el$11;
 		})()
 	];
 };
@@ -241,13 +307,18 @@ const settings = () => {
 //#region plugins/profile-theming/index.ts
 const { plugin: { scoped, store } } = shelter;
 const CDN_BASE = "https://discordcdn.mapetr.moe";
-const API_BASE = "https://api.discordcdn.mapetr.moe";
-const WS_URL = "wss://api.discordcdn.mapetr.moe/avatars/ws";
+const API_BASE = "http://localhost:3000";
+const WS_URL = "ws://localhost:3000/avatars/ws";
 const PING_INTERVAL = 3e4;
 const MAX_RECONNECT_DELAY = 3e4;
-const cache = new Map();
+const avatarCache = new Map();
+const bannerCache = new Map();
 let synced = false;
-const replacedElements = new Map();
+function getCache(asset) {
+	return asset === "avatar" ? avatarCache : bannerCache;
+}
+const replacedAvatars = new Map();
+const replacedBanners = new Map();
 let ws = null;
 let pingTimer;
 let reconnectTimer;
@@ -257,18 +328,25 @@ function wsSend(msg) {
 	if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
 }
 function clearCache() {
-	cache.clear();
+	avatarCache.clear();
+	bannerCache.clear();
 	synced = false;
 	refreshNow();
 }
-function invalidateUser(userId) {
-	for (const [el] of replacedElements) {
+function invalidateUser(userId, asset) {
+	if (!asset || asset === "avatar") for (const [el] of replacedAvatars) {
 		if (!el.isConnected) continue;
 		const url = getAvatarUrl(el);
 		if (!url) continue;
-		const id = isOurUrl(url) ? url.match(/\/avatars\/(\d+)/)?.[1] ?? null : extractUserId(url);
+		const id = isOurUrl(url) ? url.match(/\/(avatars|banners)\/(\d+)/)?.[2] ?? null : extractUserId(url);
 		if (id === userId) applyAvatar(userId, el);
 	}
+	if (!asset || asset === "banner") for (const [el] of replacedBanners) {
+		if (!el.isConnected) continue;
+		const id = extractUserIdFromBanner(el);
+		if (id === userId) applyBanner(userId, el);
+	}
+	scanAll();
 }
 function wsVerify(token) {
 	return new Promise((resolve) => {
@@ -290,7 +368,7 @@ function wsVerify(token) {
 		});
 	});
 }
-function wsCheck(ids) {
+function wsCheck(ids, asset = "avatar") {
 	return new Promise((resolve) => {
 		if (!ws || ws.readyState !== WebSocket.OPEN) {
 			resolve({});
@@ -301,18 +379,49 @@ function wsCheck(ids) {
 		});
 		wsSend({
 			type: "check",
+			asset,
 			ids
 		});
 	});
 }
-function avatarUrl(userId, hash) {
-	return `${CDN_BASE}/avatars/${userId}?h=${hash}`;
+async function deleteAsset(asset, userId, token) {
+	const endpoint = asset === "avatar" ? "avatars" : "banners";
+	try {
+		const res = await fetch(`${API_BASE}/${endpoint}/${userId}`, {
+			method: "DELETE",
+			headers: { Authorization: `Bearer ${token}` }
+		});
+		if (res.ok) return "ok";
+		if (res.status === 401) return "expired";
+		return "failed";
+	} catch {
+		return "failed";
+	}
+}
+function assetUrl(asset, userId, hash) {
+	return `${CDN_BASE}/${asset === "avatar" ? "avatars" : "banners"}/${userId}?h=${hash}`;
 }
 function extractUserId(src) {
 	const regular = src.match(/\/avatars\/(\d+)\//);
 	if (regular) return regular[1];
 	const guild = src.match(/\/users\/(\d+)\/avatars\//);
 	if (guild) return guild[1];
+	return null;
+}
+function extractUserIdFromBanner(bannerEl) {
+	const bg = bannerEl.style.backgroundImage;
+	const bgMatch = bg?.match(/url\(["']?(.+?)["']?\)/);
+	if (bgMatch?.[1]?.startsWith(`${CDN_BASE}/banners/`)) return bgMatch[1].match(/\/banners\/(\d+)/)?.[1] ?? null;
+	let container = bannerEl.parentElement;
+	while (container) {
+		const avatarImg = container.querySelector("img[src*=\"cdn.discordapp.com/avatars/\"], img[src*=\"discordcdn.mapetr.moe/avatars/\"]");
+		if (avatarImg) {
+			const src = avatarImg.src;
+			if (src.startsWith(`${CDN_BASE}/`)) return src.match(/\/avatars\/(\d+)/)?.[1] ?? null;
+			return extractUserId(src);
+		}
+		container = container.parentElement;
+	}
 	return null;
 }
 function isOurUrl(src) {
@@ -328,25 +437,51 @@ function setAvatarUrl(el, url) {
 	if (el instanceof HTMLImageElement) el.src = url;
 else el.style.backgroundImage = `url("${url}")`;
 }
+function setBannerImage(el, url) {
+	el.style.backgroundImage = `url("${url}")`;
+	el.style.backgroundSize = "cover";
+	el.style.backgroundPosition = "center";
+}
+function revertBanner(el) {
+	el.style.backgroundImage = "";
+	el.style.backgroundSize = "";
+	el.style.backgroundPosition = "";
+}
 function applyAvatar(userId, el) {
 	const currentUrl = getAvatarUrl(el);
-	const hash = cache.get(userId);
+	const hash = avatarCache.get(userId);
 	if (!hash) {
 		if (currentUrl && isOurUrl(currentUrl)) {
-			const original = replacedElements.get(el);
+			const original = replacedAvatars.get(el);
 			if (original) {
 				setAvatarUrl(el, original);
-				replacedElements.delete(el);
+				replacedAvatars.delete(el);
 			}
 		}
 		return;
 	}
-	const url = avatarUrl(userId, hash);
+	const url = assetUrl("avatar", userId, hash);
 	if (currentUrl === url) return;
-	if (currentUrl && !isOurUrl(currentUrl) && !replacedElements.has(el)) replacedElements.set(el, currentUrl);
+	if (currentUrl && !isOurUrl(currentUrl) && !replacedAvatars.has(el)) replacedAvatars.set(el, currentUrl);
 	setAvatarUrl(el, url);
 }
-function tryReplace(el) {
+function applyBanner(userId, el) {
+	const hash = bannerCache.get(userId);
+	const bg = el.style.backgroundImage;
+	const currentBgUrl = bg?.match(/url\(["']?(.+?)["']?\)/)?.[1] ?? null;
+	if (!hash) {
+		if (replacedBanners.has(el)) {
+			revertBanner(el);
+			replacedBanners.delete(el);
+		}
+		return;
+	}
+	const url = assetUrl("banner", userId, hash);
+	if (currentBgUrl === url) return;
+	if (!replacedBanners.has(el)) replacedBanners.set(el, "");
+	setBannerImage(el, url);
+}
+function tryReplaceAvatar(el) {
 	const url = getAvatarUrl(el);
 	if (!url) return;
 	const userId = isOurUrl(url) ? url.match(/\/avatars\/(\d+)/)?.[1] ?? null : extractUserId(url);
@@ -354,16 +489,24 @@ function tryReplace(el) {
 	if (!synced) return;
 	applyAvatar(userId, el);
 }
-function refreshNow() {
-	for (const [el] of replacedElements) if (el.isConnected) tryReplace(el);
+function tryReplaceBanner(el) {
+	if (!synced) return;
+	const userId = extractUserIdFromBanner(el);
+	if (!userId) return;
+	applyBanner(userId, el);
 }
-function scanAllAvatars() {
+function refreshNow() {
+	for (const [el] of replacedAvatars) if (el.isConnected) tryReplaceAvatar(el);
+	for (const [el] of replacedBanners) if (el.isConnected) tryReplaceBanner(el);
+}
+function scanAll() {
 	const imgSelector = `img[src*="cdn.discordapp.com/avatars/"], img[src*="/users/"][src*="/avatars/"]`;
 	const bgSelector = `[style*="cdn.discordapp.com/avatars/"]`;
 	const ourImgSelector = `img[src*="discordcdn.mapetr.moe/avatars/"]`;
 	const ourBgSelector = `[style*="discordcdn.mapetr.moe/avatars/"]`;
-	const selector = `${imgSelector}, ${bgSelector}, ${ourImgSelector}, ${ourBgSelector}`;
-	document.querySelectorAll(selector).forEach(tryReplace);
+	const avatarSelector = `${imgSelector}, ${bgSelector}, ${ourImgSelector}, ${ourBgSelector}`;
+	document.querySelectorAll(avatarSelector).forEach(tryReplaceAvatar);
+	document.querySelectorAll("[class*=\"banner_\"]").forEach(tryReplaceBanner);
 }
 function connectWebSocket() {
 	if (ws) {
@@ -386,15 +529,19 @@ function connectWebSocket() {
 			return;
 		}
 		if (msg.type === "sync") {
-			cache.clear();
-			if (msg.changes) for (const { userId, hash } of msg.changes) cache.set(userId, hash);
+			avatarCache.clear();
+			bannerCache.clear();
+			if (msg.avatars?.changes) for (const { userId, hash } of msg.avatars.changes) avatarCache.set(userId, hash);
+			if (msg.banners?.changes) for (const { userId, hash } of msg.banners.changes) bannerCache.set(userId, hash);
 			synced = true;
-			scanAllAvatars();
+			scanAll();
 			refreshNow();
 		} else if (msg.type === "update" && msg.userId) {
+			const asset = msg.asset ?? "avatar";
+			const cache = getCache(asset);
 			if (msg.hash) cache.set(msg.userId, msg.hash);
 else cache.delete(msg.userId);
-			invalidateUser(msg.userId);
+			invalidateUser(msg.userId, asset);
 		} else if (msg.type === "pong") {} else if (msg.type === "check" || msg.type === "verify") {
 			const cb = pendingCallbacks.get(msg.type);
 			if (cb) {
@@ -436,14 +583,17 @@ async function onLoad() {
 		}
 	}
 	connectWebSocket();
-	scanAllAvatars();
+	scanAll();
 	const imgSelector = `img[src*="cdn.discordapp.com/avatars/"], img[src*="/users/"][src*="/avatars/"]`;
 	const bgSelector = `[style*="cdn.discordapp.com/avatars/"]`;
 	const ourImgSelector = `img[src*="discordcdn.mapetr.moe/avatars/"]`;
 	const ourBgSelector = `[style*="discordcdn.mapetr.moe/avatars/"]`;
-	const selector = `${imgSelector}, ${bgSelector}, ${ourImgSelector}, ${ourBgSelector}`;
-	scoped.observeDom(selector, (elem) => {
-		tryReplace(elem);
+	const avatarSelector = `${imgSelector}, ${bgSelector}, ${ourImgSelector}, ${ourBgSelector}`;
+	scoped.observeDom(avatarSelector, (elem) => {
+		tryReplaceAvatar(elem);
+	});
+	scoped.observeDom("[class*=\"banner_\"]", (elem) => {
+		tryReplaceBanner(elem);
 	});
 }
 function onUnload() {
@@ -455,15 +605,19 @@ function onUnload() {
 		ws = null;
 	}
 	pendingCallbacks.clear();
-	for (const [el, originalUrl] of replacedElements) if (el.isConnected) setAvatarUrl(el, originalUrl);
-	replacedElements.clear();
-	cache.clear();
+	for (const [el, originalUrl] of replacedAvatars) if (el.isConnected) setAvatarUrl(el, originalUrl);
+	for (const [el] of replacedBanners) if (el.isConnected) revertBanner(el);
+	replacedAvatars.clear();
+	replacedBanners.clear();
+	avatarCache.clear();
+	bannerCache.clear();
 	synced = false;
 }
 
 //#endregion
 exports.API_BASE = API_BASE
 exports.clearCache = clearCache
+exports.deleteAsset = deleteAsset
 exports.invalidateUser = invalidateUser
 exports.onLoad = onLoad
 exports.onUnload = onUnload
