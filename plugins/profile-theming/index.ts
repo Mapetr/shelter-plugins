@@ -239,8 +239,13 @@ function tryReplaceAvatar(el: HTMLElement) {
 	applyAvatar(userId, el);
 }
 
+function isBannerInSvg(el: HTMLElement): boolean {
+	return el.parentElement?.tagName === "foreignObject";
+}
+
 function tryReplaceBanner(el: HTMLElement) {
 	if (!synced) return;
+	if (!isBannerInSvg(el)) return;
 	const userId = extractUserIdFromBanner(el);
 	if (!userId) return;
 	applyBanner(userId, el);
@@ -263,7 +268,7 @@ function scanAll() {
 	const avatarSelector = `${imgSelector}, ${bgSelector}, ${ourImgSelector}, ${ourBgSelector}`;
 	document.querySelectorAll<HTMLElement>(avatarSelector).forEach(tryReplaceAvatar);
 
-	document.querySelectorAll<HTMLElement>('[class*="banner_"]').forEach(tryReplaceBanner);
+	document.querySelectorAll<HTMLElement>('foreignObject > [class*="banner_"]').forEach(tryReplaceBanner);
 }
 
 function connectWebSocket() {
@@ -376,7 +381,7 @@ export async function onLoad() {
 	});
 
 	// Watch for banner elements
-	scoped.observeDom('[class*="banner_"]', (elem) => {
+	scoped.observeDom('foreignObject > [class*="banner_"]', (elem) => {
 		tryReplaceBanner(elem as HTMLElement);
 	});
 }
