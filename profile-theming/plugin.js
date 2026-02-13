@@ -44,27 +44,21 @@ const _tmpl$ = /*#__PURE__*/ (0, import_web.template)(`<div><!#><!/><!#><!/></di
 const { Header, HeaderTags, Button, ButtonColors, ButtonSizes, Text } = shelter.ui;
 const { createSignal, onCleanup } = shelter.solid;
 const { store: store$1 } = shelter.plugin;
-const BASE_URL = "https://api.discordcdn.mapetr.moe";
 function randomState() {
 	const arr = new Uint8Array(16);
 	crypto.getRandomValues(arr);
 	return Array.from(arr, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 async function checkToken() {
-	if (!store$1.authToken) return false;
-	try {
-		const res = await fetch(`${BASE_URL}/auth/verify`, { headers: { Authorization: `Bearer ${store$1.authToken}` } });
-		if (res.ok) return true;
-		store$1.authToken = undefined;
-		return false;
-	} catch {
-		return false;
-	}
+	if (!store$1.authToken) return { valid: false };
+	const data = await wsVerify(store$1.authToken);
+	if (!data.valid || data.expired) store$1.authToken = undefined;
+	return data;
 }
 async function uploadAvatar(userId, file) {
 	const form = new FormData();
 	form.append("avatar", file);
-	const res = await fetch(`${BASE_URL}/avatars/${userId}`, {
+	const res = await fetch(`${API_BASE}/avatars/${userId}`, {
 		method: "POST",
 		body: form,
 		headers: { Authorization: `Bearer ${store$1.authToken}` }
@@ -84,8 +78,14 @@ const settings = () => {
 	const [loggingIn, setLoggingIn] = createSignal(false);
 	let fileInput;
 	let pollTimer;
-	if (store$1.authToken) checkToken().then((valid) => {
-		if (!valid) {
+	if (store$1.authToken) checkToken().then((result) => {
+		if (!result.valid) {
+			setLoggedIn(false);
+			shelter.ui.showToast({
+				title: "Invalid session, please log in again",
+				duration: 3e3
+			});
+		} else if (result.expired) {
 			setLoggedIn(false);
 			shelter.ui.showToast({
 				title: "Session expired, please log in again",
@@ -99,10 +99,10 @@ const settings = () => {
 	const login = () => {
 		const state = randomState();
 		setLoggingIn(true);
-		window.open(`${BASE_URL}/auth/discord?state=${state}`);
+		window.open(`${API_BASE}/auth/discord?state=${state}`);
 		pollTimer = setInterval(async () => {
 			try {
-				const res = await fetch(`${BASE_URL}/auth/token?state=${state}`);
+				const res = await fetch(`${API_BASE}/auth/token?state=${state}`);
 				if (!res.ok) return;
 				const data = await res.json();
 				if (data.token) {
@@ -152,7 +152,7 @@ const settings = () => {
 				return;
 			}
 			shelter.ui.showToast({
-				title: result === "ok" ? "Avatar uploaded" : "Upload failed",
+				title: result === "ok" ? "Avatar uploaded, it will appear once processing is done" : "Upload failed",
 				duration: 3e3
 			});
 		};
@@ -242,37 +242,67 @@ const settings = () => {
 const { plugin: { scoped, store } } = shelter;
 const CDN_BASE = "https://discordcdn.mapetr.moe";
 const API_BASE = "https://api.discordcdn.mapetr.moe";
-const POSITIVE_TTL = 36e5;
-const NEGATIVE_TTL = 72e5;
-const REFRESH_INTERVAL = 3e5;
+const WS_URL = "wss://api.discordcdn.mapetr.moe/avatars/ws";
+const PING_INTERVAL = 3e4;
+const MAX_RECONNECT_DELAY = 3e4;
 const cache = new Map();
-const pendingQueue = new Map();
-const inFlight = new Map();
-let debounceTimer;
-let refreshTimer;
-let rateLimitedUntil = 0;
+let synced = false;
 const replacedElements = new Map();
+let ws = null;
+let pingTimer;
+let reconnectTimer;
+let reconnectDelay = 1e3;
+const pendingCallbacks = new Map();
+function wsSend(msg) {
+	if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+}
 function clearCache() {
 	cache.clear();
+	synced = false;
 	refreshNow();
 }
 function invalidateUser(userId) {
-	cache.delete(userId);
-}
-function getCached(userId) {
-	const entry = cache.get(userId);
-	if (!entry) return undefined;
-	if (Date.now() > entry.expiry) {
-		cache.delete(userId);
-		return undefined;
+	for (const [el] of replacedElements) {
+		if (!el.isConnected) continue;
+		const url = getAvatarUrl(el);
+		if (!url) continue;
+		const id = isOurUrl(url) ? url.match(/\/avatars\/(\d+)/)?.[1] ?? null : extractUserId(url);
+		if (id === userId) applyAvatar(userId, el);
 	}
-	return entry;
 }
-function setCache(userId, hash) {
-	const ttl = hash ? POSITIVE_TTL : NEGATIVE_TTL;
-	cache.set(userId, {
-		hash,
-		expiry: Date.now() + ttl
+function wsVerify(token) {
+	return new Promise((resolve) => {
+		if (!ws || ws.readyState !== WebSocket.OPEN) {
+			resolve({ valid: false });
+			return;
+		}
+		pendingCallbacks.set("verify", (msg) => {
+			resolve({
+				valid: msg.valid,
+				expired: msg.expired,
+				userId: msg.userId,
+				expiresAt: msg.expiresAt
+			});
+		});
+		wsSend({
+			type: "verify",
+			token
+		});
+	});
+}
+function wsCheck(ids) {
+	return new Promise((resolve) => {
+		if (!ws || ws.readyState !== WebSocket.OPEN) {
+			resolve({});
+			return;
+		}
+		pendingCallbacks.set("check", (msg) => {
+			resolve(msg.available ?? {});
+		});
+		wsSend({
+			type: "check",
+			ids
+		});
 	});
 }
 function avatarUrl(userId, hash) {
@@ -298,95 +328,95 @@ function setAvatarUrl(el, url) {
 	if (el instanceof HTMLImageElement) el.src = url;
 else el.style.backgroundImage = `url("${url}")`;
 }
-async function flushQueue() {
-	const batch = new Map(pendingQueue);
-	pendingQueue.clear();
-	const ids = [...batch.keys()];
-	if (ids.length === 0) return;
-	for (const [id, els] of batch) {
-		const existing = inFlight.get(id);
-		if (existing) existing.push(...els);
-else inFlight.set(id, [...els]);
-	}
-	try {
-		const res = await fetch(`${API_BASE}/avatars/check`, {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ ids })
-		});
-		if (res.status === 429) {
-			rateLimitedUntil = Date.now() + 6e4;
-			for (const id of ids) {
-				const els = inFlight.get(id);
-				if (els) {
-					const existing = pendingQueue.get(id);
-					if (existing) existing.push(...els);
-else pendingQueue.set(id, els);
-				}
-				inFlight.delete(id);
-			}
-			debounceTimer = setTimeout(flushQueue, 6e4);
-			return;
-		}
-		const { available } = await res.json();
-		for (const id of ids) {
-			const hash = available[id] ?? null;
-			setCache(id, hash);
-			if (hash) {
-				const url = avatarUrl(id, hash);
-				for (const el of inFlight.get(id)) {
-					const current = getAvatarUrl(el);
-					if (current && !replacedElements.has(el)) replacedElements.set(el, current);
-					setAvatarUrl(el, url);
-				}
-			}
-			inFlight.delete(id);
-		}
-	} catch {
-		for (const id of ids) inFlight.delete(id);
-	}
-}
-function queueCheck(userId, el) {
+function applyAvatar(userId, el) {
 	const currentUrl = getAvatarUrl(el);
-	if (currentUrl && isOurUrl(currentUrl)) {
-		const cached$1 = getCached(userId);
-		if (cached$1?.hash && currentUrl === avatarUrl(userId, cached$1.hash)) return;
-	}
-	const cached = getCached(userId);
-	if (cached !== undefined) {
-		if (cached.hash) {
-			const url = avatarUrl(userId, cached.hash);
-			if (currentUrl !== url) {
-				if (currentUrl && !isOurUrl(currentUrl) && !replacedElements.has(el)) replacedElements.set(el, currentUrl);
-				setAvatarUrl(el, url);
+	const hash = cache.get(userId);
+	if (!hash) {
+		if (currentUrl && isOurUrl(currentUrl)) {
+			const original = replacedElements.get(el);
+			if (original) {
+				setAvatarUrl(el, original);
+				replacedElements.delete(el);
 			}
 		}
 		return;
 	}
-	const flying = inFlight.get(userId);
-	if (flying) {
-		flying.push(el);
-		return;
-	}
-	const existing = pendingQueue.get(userId);
-	if (existing) {
-		existing.push(el);
-		return;
-	}
-	pendingQueue.set(userId, [el]);
-	clearTimeout(debounceTimer);
-	const delay = Math.max(150, rateLimitedUntil - Date.now());
-	debounceTimer = setTimeout(flushQueue, delay);
+	const url = avatarUrl(userId, hash);
+	if (currentUrl === url) return;
+	if (currentUrl && !isOurUrl(currentUrl) && !replacedElements.has(el)) replacedElements.set(el, currentUrl);
+	setAvatarUrl(el, url);
 }
 function tryReplace(el) {
 	const url = getAvatarUrl(el);
 	if (!url) return;
 	const userId = isOurUrl(url) ? url.match(/\/avatars\/(\d+)/)?.[1] ?? null : extractUserId(url);
 	if (!userId) return;
-	queueCheck(userId, el);
+	if (!synced) return;
+	applyAvatar(userId, el);
 }
 function refreshNow() {
 	for (const [el] of replacedElements) if (el.isConnected) tryReplace(el);
+}
+function scanAllAvatars() {
+	const imgSelector = `img[src*="cdn.discordapp.com/avatars/"], img[src*="/users/"][src*="/avatars/"]`;
+	const bgSelector = `[style*="cdn.discordapp.com/avatars/"]`;
+	const ourImgSelector = `img[src*="discordcdn.mapetr.moe/avatars/"]`;
+	const ourBgSelector = `[style*="discordcdn.mapetr.moe/avatars/"]`;
+	const selector = `${imgSelector}, ${bgSelector}, ${ourImgSelector}, ${ourBgSelector}`;
+	document.querySelectorAll(selector).forEach(tryReplace);
+}
+function connectWebSocket() {
+	if (ws) {
+		ws.onclose = null;
+		ws.close();
+	}
+	clearInterval(pingTimer);
+	ws = new WebSocket(WS_URL);
+	ws.onopen = () => {
+		reconnectDelay = 1e3;
+		pingTimer = setInterval(() => {
+			wsSend({ type: "ping" });
+		}, PING_INTERVAL);
+	};
+	ws.onmessage = (event) => {
+		let msg;
+		try {
+			msg = JSON.parse(event.data);
+		} catch {
+			return;
+		}
+		if (msg.type === "sync") {
+			cache.clear();
+			if (msg.changes) for (const { userId, hash } of msg.changes) cache.set(userId, hash);
+			synced = true;
+			scanAllAvatars();
+			refreshNow();
+		} else if (msg.type === "update" && msg.userId) {
+			if (msg.hash) cache.set(msg.userId, msg.hash);
+else cache.delete(msg.userId);
+			invalidateUser(msg.userId);
+		} else if (msg.type === "pong") {} else if (msg.type === "check" || msg.type === "verify") {
+			const cb = pendingCallbacks.get(msg.type);
+			if (cb) {
+				pendingCallbacks.delete(msg.type);
+				cb(msg);
+			}
+		}
+	};
+	ws.onclose = () => {
+		clearInterval(pingTimer);
+		ws = null;
+		for (const [, cb] of pendingCallbacks) cb({
+			valid: false,
+			available: {}
+		});
+		pendingCallbacks.clear();
+		reconnectTimer = setTimeout(() => {
+			connectWebSocket();
+		}, reconnectDelay);
+		reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY);
+	};
+	ws.onerror = () => {};
 }
 async function onLoad() {
 	store.userId = (await shelter.flux.awaitStore("UserStore")).getCurrentUser().id;
@@ -405,32 +435,40 @@ async function onLoad() {
 			needsRestart = true;
 		}
 	}
+	connectWebSocket();
+	scanAllAvatars();
 	const imgSelector = `img[src*="cdn.discordapp.com/avatars/"], img[src*="/users/"][src*="/avatars/"]`;
 	const bgSelector = `[style*="cdn.discordapp.com/avatars/"]`;
 	const ourImgSelector = `img[src*="discordcdn.mapetr.moe/avatars/"]`;
 	const ourBgSelector = `[style*="discordcdn.mapetr.moe/avatars/"]`;
 	const selector = `${imgSelector}, ${bgSelector}, ${ourImgSelector}, ${ourBgSelector}`;
-	document.querySelectorAll(selector).forEach(tryReplace);
 	scoped.observeDom(selector, (elem) => {
 		tryReplace(elem);
 	});
-	refreshTimer = setInterval(refreshNow, REFRESH_INTERVAL);
 }
 function onUnload() {
-	clearTimeout(debounceTimer);
-	clearInterval(refreshTimer);
+	clearInterval(pingTimer);
+	clearTimeout(reconnectTimer);
+	if (ws) {
+		ws.onclose = null;
+		ws.close();
+		ws = null;
+	}
+	pendingCallbacks.clear();
 	for (const [el, originalUrl] of replacedElements) if (el.isConnected) setAvatarUrl(el, originalUrl);
 	replacedElements.clear();
 	cache.clear();
-	pendingQueue.clear();
-	inFlight.clear();
+	synced = false;
 }
 
 //#endregion
+exports.API_BASE = API_BASE
 exports.clearCache = clearCache
 exports.invalidateUser = invalidateUser
 exports.onLoad = onLoad
 exports.onUnload = onUnload
 exports.settings = settings
+exports.wsCheck = wsCheck
+exports.wsVerify = wsVerify
 return exports;
 })({});
