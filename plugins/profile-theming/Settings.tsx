@@ -1,4 +1,4 @@
-import { clearCache, invalidateUser, API_BASE, wsVerify, type VerifyResult } from ".";
+import { clearCache, API_BASE, wsVerify, deleteAsset, type VerifyResult, type AssetType } from ".";
 
 const {
 	Header,
@@ -29,11 +29,16 @@ async function checkToken(): Promise<VerifyResult> {
 	return data;
 }
 
-async function uploadAvatar(userId: string, file: File): Promise<"ok" | "expired" | "failed"> {
+async function uploadAsset(
+	type: "avatar" | "banner",
+	userId: string,
+	file: File,
+): Promise<"ok" | "expired" | "failed"> {
 	const form = new FormData();
-	form.append("avatar", file);
+	form.append(type, file);
 
-	const res = await fetch(`${API_BASE}/avatars/${userId}`, {
+	const endpoint = type === "avatar" ? "avatars" : "banners";
+	const res = await fetch(`${API_BASE}/${endpoint}/${userId}`, {
 		method: "POST",
 		body: form,
 		headers: {
@@ -41,10 +46,7 @@ async function uploadAvatar(userId: string, file: File): Promise<"ok" | "expired
 		},
 	});
 
-	if (res.ok) {
-		invalidateUser(userId);
-		return "ok";
-	}
+	if (res.ok) return "ok";
 
 	if (res.status === 401) {
 		store.authToken = undefined;
@@ -57,7 +59,6 @@ async function uploadAvatar(userId: string, file: File): Promise<"ok" | "expired
 export const settings = () => {
 	const [loggedIn, setLoggedIn] = createSignal(!!store.authToken);
 	const [loggingIn, setLoggingIn] = createSignal(false);
-	let fileInput: HTMLInputElement | undefined;
 	let pollTimer: number | undefined;
 
 	// Verify stored token on settings open
@@ -109,8 +110,28 @@ export const settings = () => {
 		shelter.ui.showToast({ title: "Logged out", duration: 2000 });
 	};
 
-	const pickFile = () => {
-		fileInput = document.createElement("input");
+	const removeAsset = async (type: AssetType) => {
+		const userId = store.userId?.trim();
+		if (!userId) {
+			shelter.ui.showToast({ title: "no user id found", duration: 3000 });
+			return;
+		}
+		const label = type === "avatar" ? "Avatar" : "Banner";
+		const result = await deleteAsset(type, userId, store.authToken);
+		if (result === "expired") {
+			setLoggedIn(false);
+			store.authToken = undefined;
+			shelter.ui.showToast({ title: "Session expired, please log in again", duration: 3000 });
+			return;
+		}
+		shelter.ui.showToast({
+			title: result === "ok" ? `${label} removed` : "Remove failed",
+			duration: 3000,
+		});
+	};
+
+	const pickFile = (type: "avatar" | "banner") => {
+		const fileInput = document.createElement("input");
 		fileInput.type = "file";
 		fileInput.accept = "image/*";
 		fileInput.onchange = async () => {
@@ -123,14 +144,15 @@ export const settings = () => {
 				return;
 			}
 
-			const result = await uploadAvatar(userId, file);
+			const label = type === "avatar" ? "Avatar" : "Banner";
+			const result = await uploadAsset(type, userId, file);
 			if (result === "expired") {
 				setLoggedIn(false);
 				shelter.ui.showToast({ title: "Session expired, please log in again", duration: 3000 });
 				return;
 			}
 			shelter.ui.showToast({
-				title: result === "ok" ? "Avatar uploaded, it will appear once processing is done" : "Upload failed",
+				title: result === "ok" ? `${label} uploaded, it will appear once processing is done` : "Upload failed",
 				duration: 3000,
 			});
 		};
@@ -139,18 +161,11 @@ export const settings = () => {
 
 	return (
 		<>
-			<Header tag={HeaderTags.H3}>Discord Login</Header>
-			<Text>
-				{loggingIn()
-					? "Waiting for login..."
-					: loggedIn()
-						? "Logged in"
-						: "Not logged in"}
-			</Text>
+			{loggingIn() ? <Text>Waiting for login...</Text> : null }
 
-			<div style={{ "margin-top": "8px", display: "flex", gap: "8px", "justify-content": "space-between" }}>
+			<div style={{ "margin-top": "8px", display: "flex", gap: "8px" }}>
 				{loggedIn() ? (
-					<Button onClick={logout} size={ButtonSizes.MEDIUM} color={ButtonColors.RED}>
+					<Button onClick={logout} size={ButtonSizes.MEDIUM} color={ButtonColors.RED} grow={true}>
 						Logout
 					</Button>
 				) : (
@@ -164,9 +179,11 @@ export const settings = () => {
 						Login with Discord
 					</Button>
 				)}
+			</div>
 
+			<div style={{ "margin-top": "8px", display: "grid", "grid-template-columns": "1fr 1fr", gap: "8px" }}>
 				<Button
-					onClick={pickFile}
+					onClick={() => pickFile("avatar")}
 					size={ButtonSizes.MEDIUM}
 					color={ButtonColors.BRAND}
 					disabled={!loggedIn()}
@@ -174,9 +191,39 @@ export const settings = () => {
 				>
 					Upload Avatar
 				</Button>
+
+				<Button
+					onClick={() => pickFile("banner")}
+					size={ButtonSizes.MEDIUM}
+					color={ButtonColors.BRAND}
+					disabled={!loggedIn()}
+					grow={true}
+				>
+					Upload Banner
+				</Button>
+
+				<Button
+					onClick={() => removeAsset("avatar")}
+					size={ButtonSizes.MEDIUM}
+					color={ButtonColors.RED}
+					disabled={!loggedIn()}
+					grow={true}
+				>
+					Remove Avatar
+				</Button>
+
+				<Button
+					onClick={() => removeAsset("banner")}
+					size={ButtonSizes.MEDIUM}
+					color={ButtonColors.RED}
+					disabled={!loggedIn()}
+					grow={true}
+				>
+					Remove Banner
+				</Button>
 			</div>
 
-			<div style={{ "margin-top": "16px", "margin-bottom": "16px", display: "flex", gap: "8px" }}>
+			<div style={{ "margin-top": "8px", "margin-bottom": "16px" }}>
 				<Button
 					onClick={clearCache}
 					size={ButtonSizes.MEDIUM}
