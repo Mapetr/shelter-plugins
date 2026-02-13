@@ -3,7 +3,7 @@ const {
 } = shelter;
 
 const CDN_BASE = "https://discordcdn.mapetr.moe";
-const API_BASE = "https://api.discordcdn.mapetr.moe";
+export const API_BASE = "https://api.discordcdn.mapetr.moe";
 const POSITIVE_TTL = 60 * 60 * 1000; // 60 min
 const NEGATIVE_TTL = 120 * 60 * 1000; // 120 min
 const REFRESH_INTERVAL = 5 * 60 * 1000; // re-check hashes every 5 min
@@ -33,6 +33,16 @@ export function clearCache() {
 
 export function invalidateUser(userId: string) {
 	cache.delete(userId);
+	// Re-check all replaced elements for this user so they fetch the new image
+	for (const [el] of replacedElements) {
+		if (!el.isConnected) continue;
+		const url = getAvatarUrl(el);
+		if (!url) continue;
+		const id = isOurUrl(url)
+			? url.match(/\/avatars\/(\d+)/)?.[1] ?? null
+			: extractUserId(url);
+		if (id === userId) queueCheck(userId, el);
+	}
 }
 
 function getCached(userId: string): CacheEntry | undefined {

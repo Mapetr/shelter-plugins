@@ -1,8 +1,8 @@
 {
   "devDependencies": {
-    "@uwu/lune": "^1.5.0",
-    "@uwu/shelter-defs": "^1.4.1",
-    "solid-js": "^1.6.16",
+    "@uwu/lune": "^1.6.2",
+    "@uwu/shelter-defs": "^1.5.1",
+    "solid-js": "^1.9.11",
     "typescript": "^5.9.3"
   },
   "type": "module",

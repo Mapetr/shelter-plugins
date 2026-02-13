@@ -1,4 +1,4 @@
-import { clearCache, invalidateUser } from ".";
+import { clearCache, invalidateUser, API_BASE } from ".";
 
 const {
 	Header,
@@ -12,26 +12,35 @@ const {
 const { createSignal, onCleanup } = shelter.solid;
 const { store } = shelter.plugin;
 
-const BASE_URL = "https://api.discordcdn.mapetr.moe";
-
 function randomState(): string {
 	const arr = new Uint8Array(16);
 	crypto.getRandomValues(arr);
 	return Array.from(arr, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-async function checkToken(): Promise<boolean> {
-	if (!store.authToken) return false;
+interface VerifyResult {
+	valid: boolean;
+	expired?: boolean;
+	userId?: string;
+	expiresAt?: string;
+	error?: string;
+}
+
+async function checkToken(): Promise<VerifyResult> {
+	if (!store.authToken) return { valid: false, error: "no token" };
 	try {
-		const res = await fetch(`${BASE_URL}/auth/verify`, {
+		const res = await fetch(`${API_BASE}/auth/verify`, {
 			headers: { Authorization: `Bearer ${store.authToken}` },
 		});
-		if (res.ok) return true;
-		// Token expired or invalid — clear it
-		store.authToken = undefined;
-		return false;
+		const data: VerifyResult = await res.json();
+
+		if (!data.valid || data.expired) {
+			store.authToken = undefined;
+		}
+
+		return data;
 	} catch {
-		return false;
+		return { valid: false, error: "network error" };
 	}
 }
 
@@ -39,7 +48,7 @@ async function uploadAvatar(userId: string, file: File): Promise<"ok" | "expired
 	const form = new FormData();
 	form.append("avatar", file);
 
-	const res = await fetch(`${BASE_URL}/avatars/${userId}`, {
+	const res = await fetch(`${API_BASE}/avatars/${userId}`, {
 		method: "POST",
 		body: form,
 		headers: {
@@ -68,8 +77,11 @@ export const settings = () => {
 
 	// Verify stored token on settings open
 	if (store.authToken) {
-		checkToken().then((valid) => {
-			if (!valid) {
+		checkToken().then((result) => {
+			if (!result.valid) {
+				setLoggedIn(false);
+				shelter.ui.showToast({ title: "Invalid session, please log in again", duration: 3000 });
+			} else if (result.expired) {
 				setLoggedIn(false);
 				shelter.ui.showToast({ title: "Session expired, please log in again", duration: 3000 });
 			}
@@ -84,11 +96,11 @@ export const settings = () => {
 		const state = randomState();
 		setLoggingIn(true);
 
-		window.open(`${BASE_URL}/auth/discord?state=${state}`);
+		window.open(`${API_BASE}/auth/discord?state=${state}`);
 
 		pollTimer = setInterval(async () => {
 			try {
-				const res = await fetch(`${BASE_URL}/auth/token?state=${state}`);
+				const res = await fetch(`${API_BASE}/auth/token?state=${state}`);
 				if (!res.ok) return;
 
 				const data = await res.json();
