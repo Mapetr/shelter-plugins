@@ -10,12 +10,14 @@ const NEGATIVE_TTL = 120 * 60 * 1000; // 120 min - most users won't have one
 // Cache: userId -> { available, expiry }
 const cache = new Map<string, { available: boolean; expiry: number }>();
 
-// Batch queue: userId -> img elements waiting for result
-const pendingQueue = new Map<string, HTMLImageElement[]>();
+// Batch queue: userId -> elements waiting for result
+const pendingQueue = new Map<string, HTMLElement[]>();
 // Tracks userIds with an in-flight request so they don't get re-queued
-const inFlight = new Map<string, HTMLImageElement[]>();
+const inFlight = new Map<string, HTMLElement[]>();
 let debounceTimer: number | undefined;
 let rateLimitedUntil = 0;
+// Track replaced elements so we can revert on unload
+const replacedElements = new Map<HTMLElement, string>();
 
 export function clearCache() {
 	cache.clear();
@@ -50,6 +52,18 @@ function extractUserId(src: string): string | null {
 	if (guild) return guild[1];
 
 	return null;
+}
+
+function getAvatarUrl(el: HTMLElement): string | null {
+	if (el instanceof HTMLImageElement) return el.src;
+	const bg = el.style.backgroundImage;
+	const match = bg?.match(/url\(["']?(.+?)["']?\)/);
+	return match ? match[1] : null;
+}
+
+function setAvatarUrl(el: HTMLElement, url: string) {
+	if (el instanceof HTMLImageElement) el.src = url;
+	else el.style.backgroundImage = `url("${url}")`;
 }
 
 async function flushQueue() {
@@ -96,9 +110,11 @@ async function flushQueue() {
 			const has = availableSet.has(id);
 			setCache(id, has);
 			if (has) {
-				// Apply to all imgs that arrived while in-flight
-				for (const img of inFlight.get(id)!)
-					img.src = `${CDN_BASE}/avatars/${id}`;
+				for (const el of inFlight.get(id)!) {
+					const current = getAvatarUrl(el);
+					if (current && !replacedElements.has(el)) replacedElements.set(el, current);
+					setAvatarUrl(el, `${CDN_BASE}/avatars/${id}`);
+				}
 			}
 			inFlight.delete(id);
 		}
@@ -108,33 +124,37 @@ async function flushQueue() {
 	}
 }
 
-function queueCheck(userId: string, img: HTMLImageElement) {
+function queueCheck(userId: string, el: HTMLElement) {
 	const localUrl = `${CDN_BASE}/avatars/${userId}`;
+	const currentUrl = getAvatarUrl(el);
 
 	// Already replaced
-	if (img.src === localUrl) return;
+	if (currentUrl === localUrl) return;
 
 	// Check cache first
 	const cached = getCached(userId);
 	if (cached !== undefined) {
-		if (cached) img.src = localUrl;
+		if (cached) {
+			if (currentUrl && !replacedElements.has(el)) replacedElements.set(el, currentUrl);
+			setAvatarUrl(el, localUrl);
+		}
 		return;
 	}
 
-	// Already in-flight — just append the img, no new request needed
+	// Already in-flight — just append the element, no new request needed
 	const flying = inFlight.get(userId);
 	if (flying) {
-		flying.push(img);
+		flying.push(el);
 		return;
 	}
 
 	// Add to batch queue
 	const existing = pendingQueue.get(userId);
 	if (existing) {
-		existing.push(img);
+		existing.push(el);
 		return;
 	}
-	pendingQueue.set(userId, [img]);
+	pendingQueue.set(userId, [el]);
 
 	// Debounce the batch request (respect rate limit cooldown)
 	clearTimeout(debounceTimer);
@@ -142,10 +162,12 @@ function queueCheck(userId: string, img: HTMLImageElement) {
 	debounceTimer = setTimeout(flushQueue, delay) as unknown as number;
 }
 
-function tryReplace(img: HTMLImageElement) {
-	const userId = extractUserId(img.src);
+function tryReplace(el: HTMLElement) {
+	const url = getAvatarUrl(el);
+	if (!url) return;
+	const userId = extractUserId(url);
 	if (!userId) return;
-	queueCheck(userId, img);
+	queueCheck(userId, el);
 }
 
 export async function onLoad() {
@@ -165,19 +187,28 @@ export async function onLoad() {
 		}
 	}
 
-	const selector = `img[src*="cdn.discordapp.com/avatars/"], img[src*="/users/"][src*="/avatars/"]`;
+	const imgSelector = `img[src*="cdn.discordapp.com/avatars/"], img[src*="/users/"][src*="/avatars/"]`;
+	const bgSelector = `[style*="cdn.discordapp.com/avatars/"]`;
+	const selector = `${imgSelector}, ${bgSelector}`;
 
 	// Replace avatars already in the DOM
-	document.querySelectorAll<HTMLImageElement>(selector).forEach(tryReplace);
+	document.querySelectorAll<HTMLElement>(selector).forEach(tryReplace);
 
-	// Watch for new avatar images
+	// Watch for new avatar elements
 	scoped.observeDom(selector, (elem) => {
-		tryReplace(elem as HTMLImageElement);
+		tryReplace(elem as HTMLElement);
 	});
 }
 
 export function onUnload() {
 	clearTimeout(debounceTimer);
+
+	// Revert all replaced elements to their original Discord CDN url
+	for (const [el, originalUrl] of replacedElements) {
+		if (el.isConnected) setAvatarUrl(el, originalUrl);
+	}
+
+	replacedElements.clear();
 	cache.clear();
 	pendingQueue.clear();
 	inFlight.clear();
