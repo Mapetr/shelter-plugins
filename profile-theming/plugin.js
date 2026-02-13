@@ -50,6 +50,17 @@ function randomState() {
 	crypto.getRandomValues(arr);
 	return Array.from(arr, (b) => b.toString(16).padStart(2, "0")).join("");
 }
+async function checkToken() {
+	if (!store$1.authToken) return false;
+	try {
+		const res = await fetch(`${BASE_URL}/auth/verify`, { headers: { Authorization: `Bearer ${store$1.authToken}` } });
+		if (res.ok) return true;
+		store$1.authToken = undefined;
+		return false;
+	} catch {
+		return false;
+	}
+}
 async function uploadAvatar(userId, file) {
 	const form = new FormData();
 	form.append("avatar", file);
@@ -58,14 +69,30 @@ async function uploadAvatar(userId, file) {
 		body: form,
 		headers: { Authorization: `Bearer ${store$1.authToken}` }
 	});
-	if (res.ok) invalidateUser(userId);
-	return res.ok;
+	if (res.ok) {
+		invalidateUser(userId);
+		return "ok";
+	}
+	if (res.status === 401) {
+		store$1.authToken = undefined;
+		return "expired";
+	}
+	return "failed";
 }
 const settings = () => {
 	const [loggedIn, setLoggedIn] = createSignal(!!store$1.authToken);
 	const [loggingIn, setLoggingIn] = createSignal(false);
 	let fileInput;
 	let pollTimer;
+	if (store$1.authToken) checkToken().then((valid) => {
+		if (!valid) {
+			setLoggedIn(false);
+			shelter.ui.showToast({
+				title: "Session expired, please log in again",
+				duration: 3e3
+			});
+		}
+	});
 	onCleanup(() => {
 		if (pollTimer) clearInterval(pollTimer);
 	});
@@ -115,9 +142,17 @@ const settings = () => {
 				});
 				return;
 			}
-			const ok = await uploadAvatar(userId, file);
+			const result = await uploadAvatar(userId, file);
+			if (result === "expired") {
+				setLoggedIn(false);
+				shelter.ui.showToast({
+					title: "Session expired, please log in again",
+					duration: 3e3
+				});
+				return;
+			}
 			shelter.ui.showToast({
-				title: ok ? "Avatar uploaded" : "Upload failed",
+				title: result === "ok" ? "Avatar uploaded" : "Upload failed",
 				duration: 3e3
 			});
 		};
@@ -214,6 +249,7 @@ const pendingQueue = new Map();
 const inFlight = new Map();
 let debounceTimer;
 let rateLimitedUntil = 0;
+const replacedElements = new Map();
 function clearCache() {
 	cache.clear();
 }
@@ -242,6 +278,16 @@ function extractUserId(src) {
 	const guild = src.match(/\/users\/(\d+)\/avatars\//);
 	if (guild) return guild[1];
 	return null;
+}
+function getAvatarUrl(el) {
+	if (el instanceof HTMLImageElement) return el.src;
+	const bg = el.style.backgroundImage;
+	const match = bg?.match(/url\(["']?(.+?)["']?\)/);
+	return match ? match[1] : null;
+}
+function setAvatarUrl(el, url) {
+	if (el instanceof HTMLImageElement) el.src = url;
+else el.style.backgroundImage = `url("${url}")`;
 }
 async function flushQueue() {
 	const batch = new Map(pendingQueue);
@@ -278,53 +324,80 @@ else pendingQueue.set(id, imgs);
 		for (const id of ids) {
 			const has = availableSet.has(id);
 			setCache(id, has);
-			if (has) for (const img of inFlight.get(id)) img.src = `${CDN_BASE}/avatars/${id}`;
+			if (has) for (const el of inFlight.get(id)) {
+				const current = getAvatarUrl(el);
+				if (current && !replacedElements.has(el)) replacedElements.set(el, current);
+				setAvatarUrl(el, `${CDN_BASE}/avatars/${id}`);
+			}
 			inFlight.delete(id);
 		}
 	} catch {
 		for (const id of ids) inFlight.delete(id);
 	}
 }
-function queueCheck(userId, img) {
+function queueCheck(userId, el) {
 	const localUrl = `${CDN_BASE}/avatars/${userId}`;
-	if (img.src === localUrl) return;
+	const currentUrl = getAvatarUrl(el);
+	if (currentUrl === localUrl) return;
 	const cached = getCached(userId);
 	if (cached !== undefined) {
-		if (cached) img.src = localUrl;
+		if (cached) {
+			if (currentUrl && !replacedElements.has(el)) replacedElements.set(el, currentUrl);
+			setAvatarUrl(el, localUrl);
+		}
 		return;
 	}
 	const flying = inFlight.get(userId);
 	if (flying) {
-		flying.push(img);
+		flying.push(el);
 		return;
 	}
 	const existing = pendingQueue.get(userId);
 	if (existing) {
-		existing.push(img);
+		existing.push(el);
 		return;
 	}
-	pendingQueue.set(userId, [img]);
+	pendingQueue.set(userId, [el]);
 	clearTimeout(debounceTimer);
 	const delay = Math.max(150, rateLimitedUntil - Date.now());
 	debounceTimer = setTimeout(flushQueue, delay);
 }
-function tryReplace(img) {
-	const userId = extractUserId(img.src);
+function tryReplace(el) {
+	const url = getAvatarUrl(el);
+	if (!url) return;
+	const userId = extractUserId(url);
 	if (!userId) return;
-	queueCheck(userId, img);
+	queueCheck(userId, el);
 }
 async function onLoad() {
 	store.userId = (await shelter.flux.awaitStore("UserStore")).getCurrentUser().id;
-	const selector = `img[src*="cdn.discordapp.com/avatars/"], img[src*="/users/"][src*="/avatars/"]`;
+	const domains = [{
+		url: "https://discordcdn.mapetr.moe",
+		directives: ["connect-src", "img-src"]
+	}, {
+		url: "https://api.discordcdn.mapetr.moe",
+		directives: ["connect-src"]
+	}];
+	let needsRestart = false;
+	for (const { url, directives } of domains) {
+		const allowed = await window.VencordNative.csp.isDomainAllowed(url);
+		if (!allowed) {
+			await window.VencordNative.csp.requestAddOverride(url, directives, "Profile Theming plugin");
+			needsRestart = true;
+		}
+	}
+	const imgSelector = `img[src*="cdn.discordapp.com/avatars/"], img[src*="/users/"][src*="/avatars/"]`;
+	const bgSelector = `[style*="cdn.discordapp.com/avatars/"]`;
+	const selector = `${imgSelector}, ${bgSelector}`;
 	document.querySelectorAll(selector).forEach(tryReplace);
 	scoped.observeDom(selector, (elem) => {
 		tryReplace(elem);
 	});
-	window.VencordNative.csp.requestAddOverride("https://discordcdn.mapetr.moe", ["connect-src", "img-src"], "Profile Theming plugin");
-	window.VencordNative.csp.requestAddOverride("https://api.discordcdn.mapetr.moe", ["connect-src"], "Profile Theming plugin");
 }
 function onUnload() {
 	clearTimeout(debounceTimer);
+	for (const [el, originalUrl] of replacedElements) if (el.isConnected) setAvatarUrl(el, originalUrl);
+	replacedElements.clear();
 	cache.clear();
 	pendingQueue.clear();
 	inFlight.clear();
