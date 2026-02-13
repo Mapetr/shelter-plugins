@@ -3,10 +3,10 @@ const {
 } = shelter;
 
 const CDN_BASE = "https://discordcdn.mapetr.moe";
-// export const API_BASE = "https://api.discordcdn.mapetr.moe";
-// const WS_URL = "wss://api.discordcdn.mapetr.moe/avatars/ws";
-export const API_BASE = "http://localhost:3000";
-const WS_URL = "ws://localhost:3000/avatars/ws";
+export const API_BASE = "https://api.discordcdn.mapetr.moe";
+const WS_URL = "wss://api.discordcdn.mapetr.moe/avatars/ws";
+// export const API_BASE = "http://localhost:3000";
+// const WS_URL = "ws://localhost:3000/avatars/ws";
 const PING_INTERVAL = 30_000;
 const MAX_RECONNECT_DELAY = 30_000;
 
