@@ -1,4 +1,4 @@
-import { clearCache, invalidateUser, API_BASE } from ".";
+import { clearCache, invalidateUser, API_BASE, wsVerify, type VerifyResult } from ".";
 
 const {
 	Header,
@@ -18,30 +18,15 @@ function randomState(): string {
 	return Array.from(arr, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-interface VerifyResult {
-	valid: boolean;
-	expired?: boolean;
-	userId?: string;
-	expiresAt?: string;
-	error?: string;
-}
-
 async function checkToken(): Promise<VerifyResult> {
-	if (!store.authToken) return { valid: false, error: "no token" };
-	try {
-		const res = await fetch(`${API_BASE}/auth/verify`, {
-			headers: { Authorization: `Bearer ${store.authToken}` },
-		});
-		const data: VerifyResult = await res.json();
+	if (!store.authToken) return { valid: false };
+	const data = await wsVerify(store.authToken);
 
-		if (!data.valid || data.expired) {
-			store.authToken = undefined;
-		}
-
-		return data;
-	} catch {
-		return { valid: false, error: "network error" };
+	if (!data.valid || data.expired) {
+		store.authToken = undefined;
 	}
+
+	return data;
 }
 
 async function uploadAvatar(userId: string, file: File): Promise<"ok" | "expired" | "failed"> {
@@ -145,7 +130,7 @@ export const settings = () => {
 				return;
 			}
 			shelter.ui.showToast({
-				title: result === "ok" ? "Avatar uploaded" : "Upload failed",
+				title: result === "ok" ? "Avatar uploaded, it will appear once processing is done" : "Upload failed",
 				duration: 3000,
 			});
 		};

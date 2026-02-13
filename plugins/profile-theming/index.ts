@@ -4,36 +4,37 @@ const {
 
 const CDN_BASE = "https://discordcdn.mapetr.moe";
 export const API_BASE = "https://api.discordcdn.mapetr.moe";
-const POSITIVE_TTL = 60 * 60 * 1000; // 60 min
-const NEGATIVE_TTL = 120 * 60 * 1000; // 120 min
-const REFRESH_INTERVAL = 5 * 60 * 1000; // re-check hashes every 5 min
+const WS_URL = "wss://api.discordcdn.mapetr.moe/avatars/ws";
+const PING_INTERVAL = 30_000;
+const MAX_RECONNECT_DELAY = 30_000;
 
-interface CacheEntry {
-	hash: string | null; // null = not available
-	expiry: number;
-}
+// Cache: userId -> hash (authoritative after initial sync)
+const cache = new Map<string, string>();
+let synced = false;
 
-// Cache: userId -> { hash, expiry }
-const cache = new Map<string, CacheEntry>();
-
-// Batch queue: userId -> elements waiting for result
-const pendingQueue = new Map<string, HTMLElement[]>();
-// Tracks userIds with an in-flight request so they don't get re-queued
-const inFlight = new Map<string, HTMLElement[]>();
-let debounceTimer: number | undefined;
-let refreshTimer: number | undefined;
-let rateLimitedUntil = 0;
 // Track replaced elements so we can revert on unload
 const replacedElements = new Map<HTMLElement, string>();
 
+let ws: WebSocket | null = null;
+let pingTimer: number | undefined;
+let reconnectTimer: number | undefined;
+let reconnectDelay = 1000;
+
+// Pending response callbacks for request/response messages
+type WsCallback = (msg: any) => void;
+const pendingCallbacks = new Map<string, WsCallback>();
+
+function wsSend(msg: object) {
+	if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+}
+
 export function clearCache() {
 	cache.clear();
+	synced = false;
 	refreshNow();
 }
 
 export function invalidateUser(userId: string) {
-	cache.delete(userId);
-	// Re-check all replaced elements for this user so they fetch the new image
 	for (const [el] of replacedElements) {
 		if (!el.isConnected) continue;
 		const url = getAvatarUrl(el);
@@ -41,23 +42,43 @@ export function invalidateUser(userId: string) {
 		const id = isOurUrl(url)
 			? url.match(/\/avatars\/(\d+)/)?.[1] ?? null
 			: extractUserId(url);
-		if (id === userId) queueCheck(userId, el);
+		if (id === userId) applyAvatar(userId, el);
 	}
 }
 
-function getCached(userId: string): CacheEntry | undefined {
-	const entry = cache.get(userId);
-	if (!entry) return undefined;
-	if (Date.now() > entry.expiry) {
-		cache.delete(userId);
-		return undefined;
-	}
-	return entry;
+export interface VerifyResult {
+	valid: boolean;
+	expired?: boolean;
+	userId?: string;
+	expiresAt?: string;
 }
 
-function setCache(userId: string, hash: string | null) {
-	const ttl = hash ? POSITIVE_TTL : NEGATIVE_TTL;
-	cache.set(userId, { hash, expiry: Date.now() + ttl });
+/** Verify a JWT token via the WebSocket. */
+export function wsVerify(token: string): Promise<VerifyResult> {
+	return new Promise((resolve) => {
+		if (!ws || ws.readyState !== WebSocket.OPEN) {
+			resolve({ valid: false });
+			return;
+		}
+		pendingCallbacks.set("verify", (msg) => {
+			resolve({ valid: msg.valid, expired: msg.expired, userId: msg.userId, expiresAt: msg.expiresAt });
+		});
+		wsSend({ type: "verify", token });
+	});
+}
+
+/** Check avatar availability for a list of user IDs via the WebSocket. */
+export function wsCheck(ids: string[]): Promise<Record<string, string>> {
+	return new Promise((resolve) => {
+		if (!ws || ws.readyState !== WebSocket.OPEN) {
+			resolve({});
+			return;
+		}
+		pendingCallbacks.set("check", (msg) => {
+			resolve(msg.available ?? {});
+		});
+		wsSend({ type: "check", ids });
+	});
 }
 
 function avatarUrl(userId: string, hash: string): string {
@@ -88,123 +109,125 @@ function setAvatarUrl(el: HTMLElement, url: string) {
 	else el.style.backgroundImage = `url("${url}")`;
 }
 
-async function flushQueue() {
-	const batch = new Map(pendingQueue);
-	pendingQueue.clear();
-
-	const ids = [...batch.keys()];
-	if (ids.length === 0) return;
-
-	// Move to in-flight so new elements for these IDs don't trigger another request
-	for (const [id, els] of batch) {
-		const existing = inFlight.get(id);
-		if (existing) existing.push(...els);
-		else inFlight.set(id, [...els]);
-	}
-
-	try {
-		const res = await fetch(`${API_BASE}/avatars/check`, {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ ids }),
-		});
-
-		if (res.status === 429) {
-			rateLimitedUntil = Date.now() + 60_000;
-			for (const id of ids) {
-				const els = inFlight.get(id);
-				if (els) {
-					const existing = pendingQueue.get(id);
-					if (existing) existing.push(...els);
-					else pendingQueue.set(id, els);
-				}
-				inFlight.delete(id);
-			}
-			debounceTimer = setTimeout(flushQueue, 60_000) as unknown as number;
-			return;
-		}
-
-		const { available }: { available: Record<string, string> } = await res.json();
-
-		for (const id of ids) {
-			const hash = available[id] ?? null;
-			setCache(id, hash);
-			if (hash) {
-				const url = avatarUrl(id, hash);
-				for (const el of inFlight.get(id)!) {
-					const current = getAvatarUrl(el);
-					if (current && !replacedElements.has(el)) replacedElements.set(el, current);
-					setAvatarUrl(el, url);
-				}
-			}
-			inFlight.delete(id);
-		}
-	} catch {
-		for (const id of ids) inFlight.delete(id);
-	}
-}
-
-function queueCheck(userId: string, el: HTMLElement) {
+function applyAvatar(userId: string, el: HTMLElement) {
 	const currentUrl = getAvatarUrl(el);
+	const hash = cache.get(userId);
 
-	// Already one of ours — check if hash is still current
-	if (currentUrl && isOurUrl(currentUrl)) {
-		const cached = getCached(userId);
-		if (cached?.hash && currentUrl === avatarUrl(userId, cached.hash)) return;
-		// Hash changed or cache expired — fall through to re-check
-	}
-
-	// Check cache first
-	const cached = getCached(userId);
-	if (cached !== undefined) {
-		if (cached.hash) {
-			const url = avatarUrl(userId, cached.hash);
-			if (currentUrl !== url) {
-				if (currentUrl && !isOurUrl(currentUrl) && !replacedElements.has(el))
-					replacedElements.set(el, currentUrl);
-				setAvatarUrl(el, url);
+	if (!hash) {
+		// No custom avatar — if we previously replaced this element, revert it
+		if (currentUrl && isOurUrl(currentUrl)) {
+			const original = replacedElements.get(el);
+			if (original) {
+				setAvatarUrl(el, original);
+				replacedElements.delete(el);
 			}
 		}
 		return;
 	}
 
-	// Already in-flight
-	const flying = inFlight.get(userId);
-	if (flying) {
-		flying.push(el);
-		return;
-	}
+	const url = avatarUrl(userId, hash);
+	if (currentUrl === url) return;
 
-	// Add to batch queue
-	const existing = pendingQueue.get(userId);
-	if (existing) {
-		existing.push(el);
-		return;
-	}
-	pendingQueue.set(userId, [el]);
-
-	// Debounce the batch request (respect rate limit cooldown)
-	clearTimeout(debounceTimer);
-	const delay = Math.max(150, rateLimitedUntil - Date.now());
-	debounceTimer = setTimeout(flushQueue, delay) as unknown as number;
+	if (currentUrl && !isOurUrl(currentUrl) && !replacedElements.has(el))
+		replacedElements.set(el, currentUrl);
+	setAvatarUrl(el, url);
 }
 
 function tryReplace(el: HTMLElement) {
 	const url = getAvatarUrl(el);
 	if (!url) return;
-	// For elements we already replaced, extract userId from our CDN url
 	const userId = isOurUrl(url)
 		? url.match(/\/avatars\/(\d+)/)?.[1] ?? null
 		: extractUserId(url);
 	if (!userId) return;
-	queueCheck(userId, el);
+	if (!synced) return; // wait for initial sync
+	applyAvatar(userId, el);
 }
 
-// Re-check all replaced elements for hash changes
 function refreshNow() {
 	for (const [el] of replacedElements) {
 		if (el.isConnected) tryReplace(el);
 	}
+}
+
+function scanAllAvatars() {
+	const imgSelector = `img[src*="cdn.discordapp.com/avatars/"], img[src*="/users/"][src*="/avatars/"]`;
+	const bgSelector = `[style*="cdn.discordapp.com/avatars/"]`;
+	const ourImgSelector = `img[src*="discordcdn.mapetr.moe/avatars/"]`;
+	const ourBgSelector = `[style*="discordcdn.mapetr.moe/avatars/"]`;
+	const selector = `${imgSelector}, ${bgSelector}, ${ourImgSelector}, ${ourBgSelector}`;
+	document.querySelectorAll<HTMLElement>(selector).forEach(tryReplace);
+}
+
+function connectWebSocket() {
+	if (ws) {
+		ws.onclose = null;
+		ws.close();
+	}
+	clearInterval(pingTimer);
+
+	ws = new WebSocket(WS_URL);
+
+	ws.onopen = () => {
+		reconnectDelay = 1000;
+		pingTimer = setInterval(() => {
+			wsSend({ type: "ping" });
+		}, PING_INTERVAL) as unknown as number;
+	};
+
+	ws.onmessage = (event) => {
+		let msg: any;
+		try {
+			msg = JSON.parse(event.data);
+		} catch {
+			return;
+		}
+
+		if (msg.type === "sync") {
+			cache.clear();
+			if (msg.changes) {
+				for (const { userId, hash } of msg.changes) {
+					cache.set(userId, hash);
+				}
+			}
+			synced = true;
+			scanAllAvatars();
+			refreshNow();
+		} else if (msg.type === "update" && msg.userId) {
+			if (msg.hash) {
+				cache.set(msg.userId, msg.hash);
+			} else {
+				cache.delete(msg.userId);
+			}
+			invalidateUser(msg.userId);
+		} else if (msg.type === "pong") {
+			// keep-alive acknowledged
+		} else if (msg.type === "check" || msg.type === "verify") {
+			const cb = pendingCallbacks.get(msg.type);
+			if (cb) {
+				pendingCallbacks.delete(msg.type);
+				cb(msg);
+			}
+		}
+	};
+
+	ws.onclose = () => {
+		clearInterval(pingTimer);
+		ws = null;
+		// Reject any pending callbacks
+		for (const [, cb] of pendingCallbacks) {
+			cb({ valid: false, available: {} });
+		}
+		pendingCallbacks.clear();
+		reconnectTimer = setTimeout(() => {
+			connectWebSocket();
+		}, reconnectDelay) as unknown as number;
+		reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY);
+	};
+
+	ws.onerror = () => {
+		// onclose will fire after onerror, triggering reconnect
+	};
 }
 
 export async function onLoad() {
@@ -224,27 +247,33 @@ export async function onLoad() {
 		}
 	}
 
+	connectWebSocket();
+
+	// Replace avatars already in the DOM (if sync already arrived)
+	scanAllAvatars();
+
+	// Watch for new avatar elements
 	const imgSelector = `img[src*="cdn.discordapp.com/avatars/"], img[src*="/users/"][src*="/avatars/"]`;
 	const bgSelector = `[style*="cdn.discordapp.com/avatars/"]`;
 	const ourImgSelector = `img[src*="discordcdn.mapetr.moe/avatars/"]`;
 	const ourBgSelector = `[style*="discordcdn.mapetr.moe/avatars/"]`;
 	const selector = `${imgSelector}, ${bgSelector}, ${ourImgSelector}, ${ourBgSelector}`;
-
-	// Replace avatars already in the DOM
-	document.querySelectorAll<HTMLElement>(selector).forEach(tryReplace);
-
-	// Watch for new avatar elements
 	scoped.observeDom(selector, (elem) => {
 		tryReplace(elem as HTMLElement);
 	});
-
-	// Periodically re-check hashes for replaced elements
-	refreshTimer = setInterval(refreshNow, REFRESH_INTERVAL) as unknown as number;
 }
 
 export function onUnload() {
-	clearTimeout(debounceTimer);
-	clearInterval(refreshTimer);
+	clearInterval(pingTimer);
+	clearTimeout(reconnectTimer);
+
+	if (ws) {
+		ws.onclose = null;
+		ws.close();
+		ws = null;
+	}
+
+	pendingCallbacks.clear();
 
 	// Revert all replaced elements to their original Discord CDN url
 	for (const [el, originalUrl] of replacedElements) {
@@ -253,8 +282,7 @@ export function onUnload() {
 
 	replacedElements.clear();
 	cache.clear();
-	pendingQueue.clear();
-	inFlight.clear();
+	synced = false;
 }
 
 export * from "./Settings";
