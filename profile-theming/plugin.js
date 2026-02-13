@@ -489,8 +489,12 @@ function tryReplaceAvatar(el) {
 	if (!synced) return;
 	applyAvatar(userId, el);
 }
+function isBannerInSvg(el) {
+	return el.parentElement?.tagName === "foreignObject";
+}
 function tryReplaceBanner(el) {
 	if (!synced) return;
+	if (!isBannerInSvg(el)) return;
 	const userId = extractUserIdFromBanner(el);
 	if (!userId) return;
 	applyBanner(userId, el);
@@ -506,7 +510,7 @@ function scanAll() {
 	const ourBgSelector = `[style*="discordcdn.mapetr.moe/avatars/"]`;
 	const avatarSelector = `${imgSelector}, ${bgSelector}, ${ourImgSelector}, ${ourBgSelector}`;
 	document.querySelectorAll(avatarSelector).forEach(tryReplaceAvatar);
-	document.querySelectorAll("[class*=\"banner_\"]").forEach(tryReplaceBanner);
+	document.querySelectorAll("foreignObject > [class*=\"banner_\"]").forEach(tryReplaceBanner);
 }
 function connectWebSocket() {
 	if (ws) {
@@ -592,7 +596,7 @@ async function onLoad() {
 	scoped.observeDom(avatarSelector, (elem) => {
 		tryReplaceAvatar(elem);
 	});
-	scoped.observeDom("[class*=\"banner_\"]", (elem) => {
+	scoped.observeDom("foreignObject > [class*=\"banner_\"]", (elem) => {
 		tryReplaceBanner(elem);
 	});
 }
