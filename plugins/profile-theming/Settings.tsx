@@ -20,7 +20,22 @@ function randomState(): string {
 	return Array.from(arr, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-async function uploadAvatar(userId: string, file: File) {
+async function checkToken(): Promise<boolean> {
+	if (!store.authToken) return false;
+	try {
+		const res = await fetch(`${BASE_URL}/auth/verify`, {
+			headers: { Authorization: `Bearer ${store.authToken}` },
+		});
+		if (res.ok) return true;
+		// Token expired or invalid — clear it
+		store.authToken = undefined;
+		return false;
+	} catch {
+		return false;
+	}
+}
+
+async function uploadAvatar(userId: string, file: File): Promise<"ok" | "expired" | "failed"> {
 	const form = new FormData();
 	form.append("avatar", file);
 
@@ -32,9 +47,17 @@ async function uploadAvatar(userId: string, file: File) {
 		},
 	});
 
-	if (res.ok) invalidateUser(userId);
+	if (res.ok) {
+		invalidateUser(userId);
+		return "ok";
+	}
 
-	return res.ok;
+	if (res.status === 401) {
+		store.authToken = undefined;
+		return "expired";
+	}
+
+	return "failed";
 }
 
 export const settings = () => {
@@ -42,6 +65,16 @@ export const settings = () => {
 	const [loggingIn, setLoggingIn] = createSignal(false);
 	let fileInput: HTMLInputElement | undefined;
 	let pollTimer: number | undefined;
+
+	// Verify stored token on settings open
+	if (store.authToken) {
+		checkToken().then((valid) => {
+			if (!valid) {
+				setLoggedIn(false);
+				shelter.ui.showToast({ title: "Session expired, please log in again", duration: 3000 });
+			}
+		});
+	}
 
 	onCleanup(() => {
 		if (pollTimer) clearInterval(pollTimer);
@@ -93,9 +126,14 @@ export const settings = () => {
 				return;
 			}
 
-			const ok = await uploadAvatar(userId, file);
+			const result = await uploadAvatar(userId, file);
+			if (result === "expired") {
+				setLoggedIn(false);
+				shelter.ui.showToast({ title: "Session expired, please log in again", duration: 3000 });
+				return;
+			}
 			shelter.ui.showToast({
-				title: ok ? "Avatar uploaded" : "Upload failed",
+				title: result === "ok" ? "Avatar uploaded" : "Upload failed",
 				duration: 3000,
 			});
 		};
