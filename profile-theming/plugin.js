@@ -307,8 +307,8 @@ const settings = () => {
 //#region plugins/profile-theming/index.ts
 const { plugin: { scoped, store } } = shelter;
 const CDN_BASE = "https://discordcdn.mapetr.moe";
-const API_BASE = "http://localhost:3000";
-const WS_URL = "ws://localhost:3000/avatars/ws";
+const API_BASE = "https://api.discordcdn.mapetr.moe";
+const WS_URL = "wss://api.discordcdn.mapetr.moe/avatars/ws";
 const PING_INTERVAL = 3e4;
 const MAX_RECONNECT_DELAY = 3e4;
 const avatarCache = new Map();
