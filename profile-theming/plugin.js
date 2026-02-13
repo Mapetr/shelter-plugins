@@ -244,14 +244,17 @@ const CDN_BASE = "https://discordcdn.mapetr.moe";
 const API_BASE = "https://api.discordcdn.mapetr.moe";
 const POSITIVE_TTL = 36e5;
 const NEGATIVE_TTL = 72e5;
+const REFRESH_INTERVAL = 3e5;
 const cache = new Map();
 const pendingQueue = new Map();
 const inFlight = new Map();
 let debounceTimer;
+let refreshTimer;
 let rateLimitedUntil = 0;
 const replacedElements = new Map();
 function clearCache() {
 	cache.clear();
+	refreshNow();
 }
 function invalidateUser(userId) {
 	cache.delete(userId);
@@ -263,14 +266,17 @@ function getCached(userId) {
 		cache.delete(userId);
 		return undefined;
 	}
-	return entry.available;
+	return entry;
 }
-function setCache(userId, available) {
-	const ttl = available ? POSITIVE_TTL : NEGATIVE_TTL;
+function setCache(userId, hash) {
+	const ttl = hash ? POSITIVE_TTL : NEGATIVE_TTL;
 	cache.set(userId, {
-		available,
+		hash,
 		expiry: Date.now() + ttl
 	});
+}
+function avatarUrl(userId, hash) {
+	return `${CDN_BASE}/avatars/${userId}?h=${hash}`;
 }
 function extractUserId(src) {
 	const regular = src.match(/\/avatars\/(\d+)\//);
@@ -278,6 +284,9 @@ function extractUserId(src) {
 	const guild = src.match(/\/users\/(\d+)\/avatars\//);
 	if (guild) return guild[1];
 	return null;
+}
+function isOurUrl(src) {
+	return src.startsWith(`${CDN_BASE}/`);
 }
 function getAvatarUrl(el) {
 	if (el instanceof HTMLImageElement) return el.src;
@@ -294,10 +303,10 @@ async function flushQueue() {
 	pendingQueue.clear();
 	const ids = [...batch.keys()];
 	if (ids.length === 0) return;
-	for (const [id, imgs] of batch) {
+	for (const [id, els] of batch) {
 		const existing = inFlight.get(id);
-		if (existing) existing.push(...imgs);
-else inFlight.set(id, [...imgs]);
+		if (existing) existing.push(...els);
+else inFlight.set(id, [...els]);
 	}
 	try {
 		const res = await fetch(`${API_BASE}/avatars/check`, {
@@ -308,11 +317,11 @@ else inFlight.set(id, [...imgs]);
 		if (res.status === 429) {
 			rateLimitedUntil = Date.now() + 6e4;
 			for (const id of ids) {
-				const imgs = inFlight.get(id);
-				if (imgs) {
+				const els = inFlight.get(id);
+				if (els) {
 					const existing = pendingQueue.get(id);
-					if (existing) existing.push(...imgs);
-else pendingQueue.set(id, imgs);
+					if (existing) existing.push(...els);
+else pendingQueue.set(id, els);
 				}
 				inFlight.delete(id);
 			}
@@ -320,14 +329,16 @@ else pendingQueue.set(id, imgs);
 			return;
 		}
 		const { available } = await res.json();
-		const availableSet = new Set(available);
 		for (const id of ids) {
-			const has = availableSet.has(id);
-			setCache(id, has);
-			if (has) for (const el of inFlight.get(id)) {
-				const current = getAvatarUrl(el);
-				if (current && !replacedElements.has(el)) replacedElements.set(el, current);
-				setAvatarUrl(el, `${CDN_BASE}/avatars/${id}`);
+			const hash = available[id] ?? null;
+			setCache(id, hash);
+			if (hash) {
+				const url = avatarUrl(id, hash);
+				for (const el of inFlight.get(id)) {
+					const current = getAvatarUrl(el);
+					if (current && !replacedElements.has(el)) replacedElements.set(el, current);
+					setAvatarUrl(el, url);
+				}
 			}
 			inFlight.delete(id);
 		}
@@ -336,14 +347,19 @@ else pendingQueue.set(id, imgs);
 	}
 }
 function queueCheck(userId, el) {
-	const localUrl = `${CDN_BASE}/avatars/${userId}`;
 	const currentUrl = getAvatarUrl(el);
-	if (currentUrl === localUrl) return;
+	if (currentUrl && isOurUrl(currentUrl)) {
+		const cached$1 = getCached(userId);
+		if (cached$1?.hash && currentUrl === avatarUrl(userId, cached$1.hash)) return;
+	}
 	const cached = getCached(userId);
 	if (cached !== undefined) {
-		if (cached) {
-			if (currentUrl && !replacedElements.has(el)) replacedElements.set(el, currentUrl);
-			setAvatarUrl(el, localUrl);
+		if (cached.hash) {
+			const url = avatarUrl(userId, cached.hash);
+			if (currentUrl !== url) {
+				if (currentUrl && !isOurUrl(currentUrl) && !replacedElements.has(el)) replacedElements.set(el, currentUrl);
+				setAvatarUrl(el, url);
+			}
 		}
 		return;
 	}
@@ -365,9 +381,12 @@ function queueCheck(userId, el) {
 function tryReplace(el) {
 	const url = getAvatarUrl(el);
 	if (!url) return;
-	const userId = extractUserId(url);
+	const userId = isOurUrl(url) ? url.match(/\/avatars\/(\d+)/)?.[1] ?? null : extractUserId(url);
 	if (!userId) return;
 	queueCheck(userId, el);
+}
+function refreshNow() {
+	for (const [el] of replacedElements) if (el.isConnected) tryReplace(el);
 }
 async function onLoad() {
 	store.userId = (await shelter.flux.awaitStore("UserStore")).getCurrentUser().id;
@@ -388,14 +407,18 @@ async function onLoad() {
 	}
 	const imgSelector = `img[src*="cdn.discordapp.com/avatars/"], img[src*="/users/"][src*="/avatars/"]`;
 	const bgSelector = `[style*="cdn.discordapp.com/avatars/"]`;
-	const selector = `${imgSelector}, ${bgSelector}`;
+	const ourImgSelector = `img[src*="discordcdn.mapetr.moe/avatars/"]`;
+	const ourBgSelector = `[style*="discordcdn.mapetr.moe/avatars/"]`;
+	const selector = `${imgSelector}, ${bgSelector}, ${ourImgSelector}, ${ourBgSelector}`;
 	document.querySelectorAll(selector).forEach(tryReplace);
 	scoped.observeDom(selector, (elem) => {
 		tryReplace(elem);
 	});
+	refreshTimer = setInterval(refreshNow, REFRESH_INTERVAL);
 }
 function onUnload() {
 	clearTimeout(debounceTimer);
+	clearInterval(refreshTimer);
 	for (const [el, originalUrl] of replacedElements) if (el.isConnected) setAvatarUrl(el, originalUrl);
 	replacedElements.clear();
 	cache.clear();
