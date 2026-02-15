@@ -377,8 +377,8 @@ function connectWebSocket() {
 		reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY);
 	};
 
-	ws.onerror = () => {
-		reportError(new Error("WebSocket connection error"), "connectWebSocket");
+	ws.onerror = (event) => {
+		reportError(event, "connectWebSocket");
 	};
 }
 
