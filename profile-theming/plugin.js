@@ -621,7 +621,9 @@ else cache.delete(msg.userId);
 		reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY);
 	};
 	ws.onerror = (event) => {
-		reportError(event, "connectWebSocket");
+		const target = event.target;
+		const url = target?.url ?? WS_URL;
+		reportError(new Error(`WebSocket error on ${url}`), "connectWebSocket");
 	};
 }
 async function onLoad() {
@@ -629,13 +631,14 @@ async function onLoad() {
 		const userStore = await shelter.flux.awaitStore("UserStore");
 		let currentUser = userStore.getCurrentUser();
 		if (!currentUser) currentUser = await new Promise((resolve) => {
-			const unsub = userStore.addChangeListener(() => {
+			const onChange = () => {
 				const user = userStore.getCurrentUser();
 				if (user) {
-					unsub();
+					userStore.removeChangeListener(onChange);
 					resolve(user);
 				}
-			});
+			};
+			userStore.addChangeListener(onChange);
 		});
 		store.userId = currentUser.id;
 		const domains = [{
