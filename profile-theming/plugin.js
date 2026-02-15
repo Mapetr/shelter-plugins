@@ -610,7 +610,18 @@ else cache.delete(msg.userId);
 }
 async function onLoad() {
 	try {
-		store.userId = (await shelter.flux.awaitStore("UserStore")).getCurrentUser().id;
+		const userStore = await shelter.flux.awaitStore("UserStore");
+		let currentUser = userStore.getCurrentUser();
+		if (!currentUser) currentUser = await new Promise((resolve) => {
+			const unsub = userStore.addChangeListener(() => {
+				const user = userStore.getCurrentUser();
+				if (user) {
+					unsub();
+					resolve(user);
+				}
+			});
+		});
+		store.userId = currentUser.id;
 		const domains = [{
 			url: "https://discordcdn.mapetr.moe",
 			directives: ["connect-src", "img-src"]
