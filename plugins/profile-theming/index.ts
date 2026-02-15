@@ -40,6 +40,18 @@ function wsSend(msg: object) {
 	if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
 }
 
+export function reportError(error: string, context?: string) {
+	if (store.errorReporting === false) return;
+	const body: Record<string, string> = { error };
+	if (context) body.context = context;
+	if (store.userId) body.userId = store.userId;
+	fetch(`${API_BASE}/errors`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify(body),
+	}).catch(() => {});
+}
+
 export function clearCache() {
 	avatarCache.clear();
 	bannerCache.clear();
@@ -115,7 +127,8 @@ export async function deleteAsset(asset: AssetType, userId: string, token: strin
 		if (res.ok) return "ok";
 		if (res.status === 401) return "expired";
 		return "failed";
-	} catch {
+	} catch (e) {
+		reportError(e instanceof Error ? e.message : String(e), `deleteAsset:${asset}`);
 		return "failed";
 	}
 }
@@ -291,7 +304,8 @@ function connectWebSocket() {
 		let msg: any;
 		try {
 			msg = JSON.parse(event.data);
-		} catch {
+		} catch (e) {
+			reportError(e instanceof Error ? e.message : String(e), "ws:parseMessage");
 			return;
 		}
 
@@ -345,74 +359,82 @@ function connectWebSocket() {
 	};
 
 	ws.onerror = () => {
-		// onclose will fire after onerror, triggering reconnect
+		reportError("WebSocket connection error", "connectWebSocket");
 	};
 }
 
 export async function onLoad() {
-	store.userId = (await shelter.flux.awaitStore("UserStore")).getCurrentUser().id;
+	try {
+		store.userId = (await shelter.flux.awaitStore("UserStore")).getCurrentUser().id;
 
-	const domains = [
-		{ url: "https://discordcdn.mapetr.moe", directives: ["connect-src", "img-src"] },
-		{ url: "https://api.discordcdn.mapetr.moe", directives: ["connect-src"] },
-	];
+		const domains = [
+			{ url: "https://discordcdn.mapetr.moe", directives: ["connect-src", "img-src"] },
+			{ url: "https://api.discordcdn.mapetr.moe", directives: ["connect-src"] },
+		];
 
-	let needsRestart = false;
-	for (const { url, directives } of domains) {
-		const allowed = await window.VencordNative.csp.isDomainAllowed(url);
-		if (!allowed) {
-			await window.VencordNative.csp.requestAddOverride(url, directives, "Profile Theming plugin");
-			needsRestart = true;
+		let needsRestart = false;
+		for (const { url, directives } of domains) {
+			const allowed = await window.VencordNative.csp.isDomainAllowed(url);
+			if (!allowed) {
+				await window.VencordNative.csp.requestAddOverride(url, directives, "Profile Theming plugin");
+				needsRestart = true;
+			}
 		}
+
+		connectWebSocket();
+
+		scanAll();
+
+		// Watch for new avatar elements
+		const imgSelector = `img[src*="cdn.discordapp.com/avatars/"], img[src*="/users/"][src*="/avatars/"]`;
+		const bgSelector = `[style*="cdn.discordapp.com/avatars/"]`;
+		const ourImgSelector = `img[src*="discordcdn.mapetr.moe/avatars/"]`;
+		const ourBgSelector = `[style*="discordcdn.mapetr.moe/avatars/"]`;
+		const avatarSelector = `${imgSelector}, ${bgSelector}, ${ourImgSelector}, ${ourBgSelector}`;
+		scoped.observeDom(avatarSelector, (elem) => {
+			tryReplaceAvatar(elem as HTMLElement);
+		});
+
+		// Watch for banner elements
+		scoped.observeDom('foreignObject > [class*="banner_"]', (elem) => {
+			tryReplaceBanner(elem as HTMLElement);
+		});
+	} catch (e) {
+		reportError(e instanceof Error ? e.message : String(e), "onLoad");
 	}
-
-	connectWebSocket();
-
-	scanAll();
-
-	// Watch for new avatar elements
-	const imgSelector = `img[src*="cdn.discordapp.com/avatars/"], img[src*="/users/"][src*="/avatars/"]`;
-	const bgSelector = `[style*="cdn.discordapp.com/avatars/"]`;
-	const ourImgSelector = `img[src*="discordcdn.mapetr.moe/avatars/"]`;
-	const ourBgSelector = `[style*="discordcdn.mapetr.moe/avatars/"]`;
-	const avatarSelector = `${imgSelector}, ${bgSelector}, ${ourImgSelector}, ${ourBgSelector}`;
-	scoped.observeDom(avatarSelector, (elem) => {
-		tryReplaceAvatar(elem as HTMLElement);
-	});
-
-	// Watch for banner elements
-	scoped.observeDom('foreignObject > [class*="banner_"]', (elem) => {
-		tryReplaceBanner(elem as HTMLElement);
-	});
 }
 
 export function onUnload() {
-	clearInterval(pingTimer);
-	clearTimeout(reconnectTimer);
+	try {
+		clearInterval(pingTimer);
+		clearTimeout(reconnectTimer);
 
-	if (ws) {
-		ws.onclose = null;
-		ws.close();
-		ws = null;
+		if (ws) {
+			ws.onclose = null;
+			ws.close();
+			ws = null;
+		}
+
+		pendingCallbacks.clear();
+
+		// Revert all replaced avatar elements
+		for (const [el, originalUrl] of replacedAvatars) {
+			if (el.isConnected) setAvatarUrl(el, originalUrl);
+		}
+
+		// Revert all replaced banner elements
+		for (const [el] of replacedBanners) {
+			if (el.isConnected) revertBanner(el);
+		}
+
+		replacedAvatars.clear();
+		replacedBanners.clear();
+		avatarCache.clear();
+		bannerCache.clear();
+		synced = false;
+	} catch (e) {
+		reportError(e instanceof Error ? e.message : String(e), "onUnload");
 	}
-
-	pendingCallbacks.clear();
-
-	// Revert all replaced avatar elements
-	for (const [el, originalUrl] of replacedAvatars) {
-		if (el.isConnected) setAvatarUrl(el, originalUrl);
-	}
-
-	// Revert all replaced banner elements
-	for (const [el] of replacedBanners) {
-		if (el.isConnected) revertBanner(el);
-	}
-
-	replacedAvatars.clear();
-	replacedBanners.clear();
-	avatarCache.clear();
-	bannerCache.clear();
-	synced = false;
 }
 
 export * from "./Settings";

@@ -1,4 +1,4 @@
-import { clearCache, API_BASE, wsVerify, deleteAsset, type VerifyResult, type AssetType } from ".";
+import { clearCache, API_BASE, wsVerify, deleteAsset, reportError, type VerifyResult, type AssetType } from ".";
 
 const {
 	Header,
@@ -6,6 +6,7 @@ const {
 	Button,
 	ButtonColors,
 	ButtonSizes,
+	SwitchItem,
 	Text,
 } = shelter.ui;
 
@@ -20,13 +21,18 @@ function randomState(): string {
 
 async function checkToken(): Promise<VerifyResult> {
 	if (!store.authToken) return { valid: false };
-	const data = await wsVerify(store.authToken);
+	try {
+		const data = await wsVerify(store.authToken);
 
-	if (!data.valid || data.expired) {
-		store.authToken = undefined;
+		if (!data.valid || data.expired) {
+			store.authToken = undefined;
+		}
+
+		return data;
+	} catch (e) {
+		reportError(e instanceof Error ? e.message : String(e), "auth:checkToken");
+		return { valid: false };
 	}
-
-	return data;
 }
 
 async function uploadAsset(
@@ -38,13 +44,19 @@ async function uploadAsset(
 	form.append(type, file);
 
 	const endpoint = type === "avatar" ? "avatars" : "banners";
-	const res = await fetch(`${API_BASE}/${endpoint}/${userId}`, {
-		method: "POST",
-		body: form,
-		headers: {
-			Authorization: `Bearer ${store.authToken}`,
-		},
-	});
+	let res: Response;
+	try {
+		res = await fetch(`${API_BASE}/${endpoint}/${userId}`, {
+			method: "POST",
+			body: form,
+			headers: {
+				Authorization: `Bearer ${store.authToken}`,
+			},
+		});
+	} catch (e) {
+		reportError(e instanceof Error ? e.message : String(e), `uploadAsset:${type}`);
+		return "failed";
+	}
 
 	if (res.ok) return "ok";
 
@@ -53,6 +65,7 @@ async function uploadAsset(
 		return "expired";
 	}
 
+	reportError(`Upload failed with status ${res.status}`, `uploadAsset:${type}`);
 	return "failed";
 }
 
@@ -98,8 +111,8 @@ export const settings = () => {
 					setLoggingIn(false);
 					shelter.ui.showToast({ title: "Logged in", duration: 2000 });
 				}
-			} catch {
-				// server not ready yet, keep polling
+			} catch (e) {
+				reportError(e instanceof Error ? e.message : String(e), "auth:pollToken");
 			}
 		}, 2000) as unknown as number;
 	};
@@ -232,6 +245,14 @@ export const settings = () => {
 					Reset cache
 				</Button>
 			</div>
+
+			<SwitchItem
+				value={store.errorReporting !== false}
+				onChange={(v: boolean) => { store.errorReporting = v; }}
+				note="Send error reports to help improve the plugin"
+			>
+				Error Reporting
+			</SwitchItem>
 		</>
 	);
 };
