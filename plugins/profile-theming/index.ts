@@ -378,7 +378,9 @@ function connectWebSocket() {
 	};
 
 	ws.onerror = (event) => {
-		reportError(event, "connectWebSocket");
+		const target = event.target as WebSocket | null;
+		const url = target?.url ?? WS_URL;
+		reportError(new Error(`WebSocket error on ${url}`), "connectWebSocket");
 	};
 }
 
@@ -388,13 +390,14 @@ export async function onLoad() {
 		let currentUser = userStore.getCurrentUser();
 		if (!currentUser) {
 			currentUser = await new Promise<any>((resolve) => {
-				const unsub = userStore.addChangeListener(() => {
+				const onChange = () => {
 					const user = userStore.getCurrentUser();
 					if (user) {
-						unsub();
+						userStore.removeChangeListener(onChange);
 						resolve(user);
 					}
-				});
+				};
+				userStore.addChangeListener(onChange);
 			});
 		}
 		store.userId = currentUser.id;
