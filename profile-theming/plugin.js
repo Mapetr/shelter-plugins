@@ -41,7 +41,7 @@ var import_web$3 = __toESM(require_web(), 1);
 var import_web$4 = __toESM(require_web(), 1);
 var import_web$5 = __toESM(require_web(), 1);
 const _tmpl$ = /*#__PURE__*/ (0, import_web.template)(`<div></div>`, 2), _tmpl$2 = /*#__PURE__*/ (0, import_web.template)(`<div><!#><!/><!#><!/><!#><!/><!#><!/></div>`, 10);
-const { Header, HeaderTags, Button, ButtonColors, ButtonSizes, Text } = shelter.ui;
+const { Header, HeaderTags, Button, ButtonColors, ButtonSizes, SwitchItem, Text } = shelter.ui;
 const { createSignal, onCleanup } = shelter.solid;
 const { store: store$1 } = shelter.plugin;
 function randomState() {
@@ -51,24 +51,36 @@ function randomState() {
 }
 async function checkToken() {
 	if (!store$1.authToken) return { valid: false };
-	const data = await wsVerify(store$1.authToken);
-	if (!data.valid || data.expired) store$1.authToken = undefined;
-	return data;
+	try {
+		const data = await wsVerify(store$1.authToken);
+		if (!data.valid || data.expired) store$1.authToken = undefined;
+		return data;
+	} catch (e) {
+		reportError(e instanceof Error ? e.message : String(e), "auth:checkToken");
+		return { valid: false };
+	}
 }
 async function uploadAsset(type, userId, file) {
 	const form = new FormData();
 	form.append(type, file);
 	const endpoint = type === "avatar" ? "avatars" : "banners";
-	const res = await fetch(`${API_BASE}/${endpoint}/${userId}`, {
-		method: "POST",
-		body: form,
-		headers: { Authorization: `Bearer ${store$1.authToken}` }
-	});
+	let res;
+	try {
+		res = await fetch(`${API_BASE}/${endpoint}/${userId}`, {
+			method: "POST",
+			body: form,
+			headers: { Authorization: `Bearer ${store$1.authToken}` }
+		});
+	} catch (e) {
+		reportError(e instanceof Error ? e.message : String(e), `uploadAsset:${type}`);
+		return "failed";
+	}
 	if (res.ok) return "ok";
 	if (res.status === 401) {
 		store$1.authToken = undefined;
 		return "expired";
 	}
+	reportError(`Upload failed with status ${res.status}`, `uploadAsset:${type}`);
 	return "failed";
 }
 const settings = () => {
@@ -113,7 +125,9 @@ const settings = () => {
 						duration: 2e3
 					});
 				}
-			} catch {}
+			} catch (e) {
+				reportError(e instanceof Error ? e.message : String(e), "auth:pollToken");
+			}
 		}, 2e3);
 	};
 	const logout = () => {
@@ -299,7 +313,17 @@ const settings = () => {
 				children: "Reset cache"
 			}));
 			return _el$11;
-		})()
+		})(),
+		(0, import_web$2.createComponent)(SwitchItem, {
+			get value() {
+				return store$1.errorReporting !== false;
+			},
+			onChange: (v) => {
+				store$1.errorReporting = v;
+			},
+			note: "Send error reports to help improve the plugin",
+			children: "Error Reporting"
+		})
 	];
 };
 
@@ -326,6 +350,17 @@ let reconnectDelay = 1e3;
 const pendingCallbacks = new Map();
 function wsSend(msg) {
 	if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+}
+function reportError(error, context) {
+	if (store.errorReporting === false) return;
+	const body = { error };
+	if (context) body.context = context;
+	if (store.userId) body.userId = store.userId;
+	fetch(`${API_BASE}/errors`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify(body)
+	}).catch(() => {});
 }
 function clearCache() {
 	avatarCache.clear();
@@ -394,7 +429,8 @@ async function deleteAsset(asset, userId, token) {
 		if (res.ok) return "ok";
 		if (res.status === 401) return "expired";
 		return "failed";
-	} catch {
+	} catch (e) {
+		reportError(e instanceof Error ? e.message : String(e), `deleteAsset:${asset}`);
 		return "failed";
 	}
 }
@@ -529,7 +565,8 @@ function connectWebSocket() {
 		let msg;
 		try {
 			msg = JSON.parse(event.data);
-		} catch {
+		} catch (e) {
+			reportError(e instanceof Error ? e.message : String(e), "ws:parseMessage");
 			return;
 		}
 		if (msg.type === "sync") {
@@ -567,55 +604,65 @@ else cache.delete(msg.userId);
 		}, reconnectDelay);
 		reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY);
 	};
-	ws.onerror = () => {};
+	ws.onerror = () => {
+		reportError("WebSocket connection error", "connectWebSocket");
+	};
 }
 async function onLoad() {
-	store.userId = (await shelter.flux.awaitStore("UserStore")).getCurrentUser().id;
-	const domains = [{
-		url: "https://discordcdn.mapetr.moe",
-		directives: ["connect-src", "img-src"]
-	}, {
-		url: "https://api.discordcdn.mapetr.moe",
-		directives: ["connect-src"]
-	}];
-	let needsRestart = false;
-	for (const { url, directives } of domains) {
-		const allowed = await window.VencordNative.csp.isDomainAllowed(url);
-		if (!allowed) {
-			await window.VencordNative.csp.requestAddOverride(url, directives, "Profile Theming plugin");
-			needsRestart = true;
+	try {
+		store.userId = (await shelter.flux.awaitStore("UserStore")).getCurrentUser().id;
+		const domains = [{
+			url: "https://discordcdn.mapetr.moe",
+			directives: ["connect-src", "img-src"]
+		}, {
+			url: "https://api.discordcdn.mapetr.moe",
+			directives: ["connect-src"]
+		}];
+		let needsRestart = false;
+		for (const { url, directives } of domains) {
+			const allowed = await window.VencordNative.csp.isDomainAllowed(url);
+			if (!allowed) {
+				await window.VencordNative.csp.requestAddOverride(url, directives, "Profile Theming plugin");
+				needsRestart = true;
+			}
 		}
+		connectWebSocket();
+		scanAll();
+		const imgSelector = `img[src*="cdn.discordapp.com/avatars/"], img[src*="/users/"][src*="/avatars/"]`;
+		const bgSelector = `[style*="cdn.discordapp.com/avatars/"]`;
+		const ourImgSelector = `img[src*="discordcdn.mapetr.moe/avatars/"]`;
+		const ourBgSelector = `[style*="discordcdn.mapetr.moe/avatars/"]`;
+		const avatarSelector = `${imgSelector}, ${bgSelector}, ${ourImgSelector}, ${ourBgSelector}`;
+		scoped.observeDom(avatarSelector, (elem) => {
+			tryReplaceAvatar(elem);
+		});
+		scoped.observeDom("foreignObject > [class*=\"banner_\"]", (elem) => {
+			tryReplaceBanner(elem);
+		});
+	} catch (e) {
+		reportError(e instanceof Error ? e.message : String(e), "onLoad");
 	}
-	connectWebSocket();
-	scanAll();
-	const imgSelector = `img[src*="cdn.discordapp.com/avatars/"], img[src*="/users/"][src*="/avatars/"]`;
-	const bgSelector = `[style*="cdn.discordapp.com/avatars/"]`;
-	const ourImgSelector = `img[src*="discordcdn.mapetr.moe/avatars/"]`;
-	const ourBgSelector = `[style*="discordcdn.mapetr.moe/avatars/"]`;
-	const avatarSelector = `${imgSelector}, ${bgSelector}, ${ourImgSelector}, ${ourBgSelector}`;
-	scoped.observeDom(avatarSelector, (elem) => {
-		tryReplaceAvatar(elem);
-	});
-	scoped.observeDom("foreignObject > [class*=\"banner_\"]", (elem) => {
-		tryReplaceBanner(elem);
-	});
 }
 function onUnload() {
-	clearInterval(pingTimer);
-	clearTimeout(reconnectTimer);
-	if (ws) {
-		ws.onclose = null;
-		ws.close();
-		ws = null;
+	try {
+		clearInterval(pingTimer);
+		clearTimeout(reconnectTimer);
+		if (ws) {
+			ws.onclose = null;
+			ws.close();
+			ws = null;
+		}
+		pendingCallbacks.clear();
+		for (const [el, originalUrl] of replacedAvatars) if (el.isConnected) setAvatarUrl(el, originalUrl);
+		for (const [el] of replacedBanners) if (el.isConnected) revertBanner(el);
+		replacedAvatars.clear();
+		replacedBanners.clear();
+		avatarCache.clear();
+		bannerCache.clear();
+		synced = false;
+	} catch (e) {
+		reportError(e instanceof Error ? e.message : String(e), "onUnload");
 	}
-	pendingCallbacks.clear();
-	for (const [el, originalUrl] of replacedAvatars) if (el.isConnected) setAvatarUrl(el, originalUrl);
-	for (const [el] of replacedBanners) if (el.isConnected) revertBanner(el);
-	replacedAvatars.clear();
-	replacedBanners.clear();
-	avatarCache.clear();
-	bannerCache.clear();
-	synced = false;
 }
 
 //#endregion
@@ -625,6 +672,7 @@ exports.deleteAsset = deleteAsset
 exports.invalidateUser = invalidateUser
 exports.onLoad = onLoad
 exports.onUnload = onUnload
+exports.reportError = reportError
 exports.settings = settings
 exports.wsCheck = wsCheck
 exports.wsVerify = wsVerify
