@@ -56,7 +56,7 @@ async function checkToken() {
 		if (!data.valid || data.expired) store$1.authToken = undefined;
 		return data;
 	} catch (e) {
-		reportError(e instanceof Error ? e.message : String(e), "auth:checkToken");
+		reportError(e, "auth:checkToken");
 		return { valid: false };
 	}
 }
@@ -72,7 +72,7 @@ async function uploadAsset(type, userId, file) {
 			headers: { Authorization: `Bearer ${store$1.authToken}` }
 		});
 	} catch (e) {
-		reportError(e instanceof Error ? e.message : String(e), `uploadAsset:${type}`);
+		reportError(e, `uploadAsset:${type}`);
 		return "failed";
 	}
 	if (res.ok) return "ok";
@@ -80,7 +80,7 @@ async function uploadAsset(type, userId, file) {
 		store$1.authToken = undefined;
 		return "expired";
 	}
-	reportError(`Upload failed with status ${res.status}`, `uploadAsset:${type}`);
+	reportError(new Error(`Upload failed with status ${res.status}`), `uploadAsset:${type}`);
 	return "failed";
 }
 const settings = () => {
@@ -126,7 +126,7 @@ const settings = () => {
 					});
 				}
 			} catch (e) {
-				reportError(e instanceof Error ? e.message : String(e), "auth:pollToken");
+				reportError(e, "auth:pollToken");
 			}
 		}, 2e3);
 	};
@@ -351,10 +351,26 @@ const pendingCallbacks = new Map();
 function wsSend(msg) {
 	if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
 }
-function reportError(error, context) {
+function extractLocation(err) {
+	if (!(err instanceof Error) || !err.stack) return undefined;
+	const lines = err.stack.split("\n");
+	for (const line of lines) {
+		const trimmed = line.trim();
+		if (!trimmed.startsWith("at ")) continue;
+		if (trimmed.includes("reportError")) continue;
+		const match = trimmed.match(/\((.+):(\d+):(\d+)\)$/) ?? trimmed.match(/at (.+):(\d+):(\d+)$/);
+		if (match) return `${match[1]}:${match[2]}:${match[3]}`;
+	}
+	return undefined;
+}
+function reportError(err, context) {
 	if (store.errorReporting === false) return;
-	const body = { error };
+	const message = err instanceof Error ? err.message : String(err);
+	const location = extractLocation(err);
+	const body = { error: message };
 	if (context) body.context = context;
+	if (location) body.location = location;
+	if (err instanceof Error && err.stack) body.stack = err.stack;
 	if (store.userId) body.userId = store.userId;
 	fetch(`${API_BASE}/errors`, {
 		method: "POST",
@@ -430,7 +446,7 @@ async function deleteAsset(asset, userId, token) {
 		if (res.status === 401) return "expired";
 		return "failed";
 	} catch (e) {
-		reportError(e instanceof Error ? e.message : String(e), `deleteAsset:${asset}`);
+		reportError(e, `deleteAsset:${asset}`);
 		return "failed";
 	}
 }
@@ -566,7 +582,7 @@ function connectWebSocket() {
 		try {
 			msg = JSON.parse(event.data);
 		} catch (e) {
-			reportError(e instanceof Error ? e.message : String(e), "ws:parseMessage");
+			reportError(e, "ws:parseMessage");
 			return;
 		}
 		if (msg.type === "sync") {
@@ -605,7 +621,7 @@ else cache.delete(msg.userId);
 		reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY);
 	};
 	ws.onerror = () => {
-		reportError("WebSocket connection error", "connectWebSocket");
+		reportError(new Error("WebSocket connection error"), "connectWebSocket");
 	};
 }
 async function onLoad() {
@@ -651,7 +667,7 @@ async function onLoad() {
 			tryReplaceBanner(elem);
 		});
 	} catch (e) {
-		reportError(e instanceof Error ? e.message : String(e), "onLoad");
+		reportError(e, "onLoad");
 	}
 }
 function onUnload() {
@@ -672,7 +688,7 @@ function onUnload() {
 		bannerCache.clear();
 		synced = false;
 	} catch (e) {
-		reportError(e instanceof Error ? e.message : String(e), "onUnload");
+		reportError(e, "onUnload");
 	}
 }
 
