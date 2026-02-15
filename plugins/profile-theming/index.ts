@@ -40,10 +40,29 @@ function wsSend(msg: object) {
 	if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
 }
 
-export function reportError(error: string, context?: string) {
+function extractLocation(err: unknown): string | undefined {
+	if (!(err instanceof Error) || !err.stack) return undefined;
+	// Match first frame that isn't reportError itself
+	const lines = err.stack.split("\n");
+	for (const line of lines) {
+		const trimmed = line.trim();
+		if (!trimmed.startsWith("at ")) continue;
+		if (trimmed.includes("reportError")) continue;
+		// "at funcName (file:line:col)" or "at file:line:col"
+		const match = trimmed.match(/\((.+):(\d+):(\d+)\)$/) ?? trimmed.match(/at (.+):(\d+):(\d+)$/);
+		if (match) return `${match[1]}:${match[2]}:${match[3]}`;
+	}
+	return undefined;
+}
+
+export function reportError(err: unknown, context?: string) {
 	if (store.errorReporting === false) return;
-	const body: Record<string, string> = { error };
+	const message = err instanceof Error ? err.message : String(err);
+	const location = extractLocation(err);
+	const body: Record<string, string> = { error: message };
 	if (context) body.context = context;
+	if (location) body.location = location;
+	if (err instanceof Error && err.stack) body.stack = err.stack;
 	if (store.userId) body.userId = store.userId;
 	fetch(`${API_BASE}/errors`, {
 		method: "POST",
@@ -128,7 +147,7 @@ export async function deleteAsset(asset: AssetType, userId: string, token: strin
 		if (res.status === 401) return "expired";
 		return "failed";
 	} catch (e) {
-		reportError(e instanceof Error ? e.message : String(e), `deleteAsset:${asset}`);
+		reportError(e, `deleteAsset:${asset}`);
 		return "failed";
 	}
 }
@@ -305,7 +324,7 @@ function connectWebSocket() {
 		try {
 			msg = JSON.parse(event.data);
 		} catch (e) {
-			reportError(e instanceof Error ? e.message : String(e), "ws:parseMessage");
+			reportError(e, "ws:parseMessage");
 			return;
 		}
 
@@ -359,7 +378,7 @@ function connectWebSocket() {
 	};
 
 	ws.onerror = () => {
-		reportError("WebSocket connection error", "connectWebSocket");
+		reportError(new Error("WebSocket connection error"), "connectWebSocket");
 	};
 }
 
@@ -413,7 +432,7 @@ export async function onLoad() {
 			tryReplaceBanner(elem as HTMLElement);
 		});
 	} catch (e) {
-		reportError(e instanceof Error ? e.message : String(e), "onLoad");
+		reportError(e, "onLoad");
 	}
 }
 
@@ -446,7 +465,7 @@ export function onUnload() {
 		bannerCache.clear();
 		synced = false;
 	} catch (e) {
-		reportError(e instanceof Error ? e.message : String(e), "onUnload");
+		reportError(e, "onUnload");
 	}
 }
 

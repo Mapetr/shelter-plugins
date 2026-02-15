@@ -30,7 +30,7 @@ async function checkToken(): Promise<VerifyResult> {
 
 		return data;
 	} catch (e) {
-		reportError(e instanceof Error ? e.message : String(e), "auth:checkToken");
+		reportError(e, "auth:checkToken");
 		return { valid: false };
 	}
 }
@@ -54,7 +54,7 @@ async function uploadAsset(
 			},
 		});
 	} catch (e) {
-		reportError(e instanceof Error ? e.message : String(e), `uploadAsset:${type}`);
+		reportError(e, `uploadAsset:${type}`);
 		return "failed";
 	}
 
@@ -65,7 +65,7 @@ async function uploadAsset(
 		return "expired";
 	}
 
-	reportError(`Upload failed with status ${res.status}`, `uploadAsset:${type}`);
+	reportError(new Error(`Upload failed with status ${res.status}`), `uploadAsset:${type}`);
 	return "failed";
 }
 
@@ -112,7 +112,7 @@ export const settings = () => {
 					shelter.ui.showToast({ title: "Logged in", duration: 2000 });
 				}
 			} catch (e) {
-				reportError(e instanceof Error ? e.message : String(e), "auth:pollToken");
+				reportError(e, "auth:pollToken");
 			}
 		}, 2000) as unknown as number;
 	};
