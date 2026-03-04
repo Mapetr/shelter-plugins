@@ -44,13 +44,17 @@ export async function getScrobble() {
 }
 
 async function getArt(track: string, album: string, artist: string) {
+    if (!store.token) return "";
+
     const metadata = await fetch(`https://shcors.uwu.network/https://api.listenbrainz.org/1/metadata/lookup/?${new URLSearchParams({
         recording_name: track,
         release_name: album,
         artist_name: artist,
         metadata: "true",
         inc: "artist tag release"
-    })}`).then(async (result) => {
+    })}`, {
+        headers: { "Authorization": `Token ${store.token}` }
+    }).then(async (result) => {
         return await result.json()
     });
 

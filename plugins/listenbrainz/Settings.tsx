@@ -16,6 +16,15 @@ export const settings = () => (
 			}}
 		/>
 
+		<Header tag={HeaderTags.H3}>User Token</Header>
+		<TextBox
+			value={store.token ?? ""}
+			type="password"
+			onInput={(v) => {
+				store.token = v;
+			}}
+		/>
+
 		<Header tag={HeaderTags.H3}>Application name</Header>
 		<TextBox
 			value={store.name ?? ""}

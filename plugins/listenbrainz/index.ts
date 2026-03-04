@@ -10,6 +10,8 @@ const {
 export const DISCORD_APP_ID = "1107251687984472144";
 
 store.username ??= "";
+store.token ??= "";
+store.name ??= "music";
 store.interval ??= 10000;
 
 let interval: number;
