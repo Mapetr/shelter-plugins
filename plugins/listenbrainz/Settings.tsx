@@ -32,6 +32,7 @@ export const settings = () => (
 				store.name = v;
 			}}
 		/>
+		
 
 		<Header tag={HeaderTags.H3}>Polling interval (in ms)</Header>
 		<TextBox
