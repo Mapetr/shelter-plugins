@@ -78,13 +78,14 @@ async function getScrobble() {
 	});
 }
 async function getArt(track, album, artist) {
+	if (!store$2.token) return "";
 	const metadata = await fetch(`https://shcors.uwu.network/https://api.listenbrainz.org/1/metadata/lookup/?${new URLSearchParams({
 		recording_name: track,
 		release_name: album,
 		artist_name: artist,
 		metadata: "true",
 		inc: "artist tag release"
-	})}`).then(async (result) => {
+	})}`, { headers: { "Authorization": `Token ${store$2.token}` } }).then(async (result) => {
 		return await result.json();
 	});
 	if (!metadata.release_mbid) return "";
@@ -132,6 +133,21 @@ const settings = () => [
 		get tag() {
 			return HeaderTags.H3;
 		},
+		children: "User Token"
+	}),
+	(0, import_web.createComponent)(TextBox, {
+		get value() {
+			return store$1.token ?? "";
+		},
+		type: "password",
+		onInput: (v) => {
+			store$1.token = v;
+		}
+	}),
+	(0, import_web.createComponent)(Header, {
+		get tag() {
+			return HeaderTags.H3;
+		},
 		children: "Application name"
 	}),
 	(0, import_web.createComponent)(TextBox, {
@@ -168,6 +184,8 @@ const settings = () => [
 const { util: { log }, plugin: { store }, flux: { dispatcher } } = shelter;
 const DISCORD_APP_ID = "1107251687984472144";
 store.username ??= "";
+store.token ??= "";
+store.name ??= "music";
 store.interval ??= 1e4;
 let interval;
 function onLoad() {
