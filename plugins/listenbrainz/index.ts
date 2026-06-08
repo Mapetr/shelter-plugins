@@ -18,8 +18,9 @@ let interval: number;
 
 export function onLoad() {
 	interval = setInterval(() => {getScrobble()}, 10000);
-
-	window.VencordNative.csp.requestAddOverride("https://shcors.uwu.network", ["connect-src"], "Profile Theming plugin");
+	if (window.VencordNative) {
+		window.VencordNative.csp.requestAddOverride("https://shcors.uwu.network", ["connect-src"], "Profile Theming plugin");
+	}
 }
 
 export function onUnload() {
